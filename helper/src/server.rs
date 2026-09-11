@@ -4,6 +4,7 @@
 //! Milestone A: a single client, no re-accept on disconnect (a later task adds reconnect).
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use anyhow::Context;
 use tokio::io::AsyncWriteExt;
@@ -15,8 +16,10 @@ use crate::source::Source;
 use crate::wire::{self, Control, Msg};
 
 /// The one in-flight frame slot a `watch` channel carries: `None` until the producer emits its
-/// first frame.
-type FrameSlot = Option<(u64, Vec<u8>)>;
+/// first frame. Wrapped in an `Arc` so handing a frame from the `watch::Ref` to the writer (past the
+/// `.await` boundary) is an O(1) refcount bump rather than cloning the ~900 KB pixel buffer — see
+/// `produce_frames`/`write_frames`.
+type FrameSlot = Option<Arc<(u64, Vec<u8>)>>;
 
 /// Accepts one client on `listen`, then streams frames from `source` to it until it disconnects.
 ///
@@ -52,20 +55,26 @@ pub async fn serve(
     // 3+4. Frame production/writing and CONTROL forwarding run concurrently on this one task
     // (no `tokio::spawn` — see the module doc); whichever ends first (client disconnected on
     // either half) ends the session.
+    // Whichever branch notices the client disconnect (either half) simply ends its own loop and
+    // returns/breaks — none of them propagate the resulting I/O error through `?`, so an ordinary
+    // disconnect always ends `serve()` with `Ok(())` (see each function's own doc comment). Only
+    // the bind/accept/HELLO/STREAM_INFO setup above this point still propagates as a genuine error.
     let (frame_tx, frame_rx) = watch::channel::<FrameSlot>(None);
     tokio::select! {
         _ = produce_frames(source, frame_tx) => {}
-        res = write_frames(wr, frame_rx) => { res?; }
+        _ = write_frames(wr, frame_rx) => {}
         _ = forward_control(rd, control_tx) => {}
     }
     Ok(())
 }
 
 /// Pulls frames from `source` forever, publishing each to `tx`. Never blocks on the socket —
-/// `tx.send` only overwrites the watched value and notifies waiters (see `serve` docs).
+/// `tx.send` only overwrites the watched value and notifies waiters (see `serve` docs). Each frame
+/// is wrapped in an `Arc` once here so `write_frames` can clone it out of the `watch::Ref` as an
+/// O(1) refcount bump instead of an ~900 KB copy.
 async fn produce_frames(mut source: impl Source, tx: watch::Sender<FrameSlot>) {
     while let Some(frame) = source.next_frame().await {
-        if tx.send(Some(frame)).is_err() {
+        if tx.send(Some(Arc::new(frame))).is_err() {
             break; // writer side gone (client disconnected) — nothing left to feed.
         }
     }
@@ -73,13 +82,23 @@ async fn produce_frames(mut source: impl Source, tx: watch::Sender<FrameSlot>) {
 
 /// Writes each newest frame reported by `rx` to `wr`. If several frames land in `rx` while a write
 /// is still in flight, only the latest is seen on the next iteration — the rest are dropped.
-async fn write_frames(mut wr: OwnedWriteHalf, mut rx: watch::Receiver<FrameSlot>) -> anyhow::Result<()> {
+///
+/// Ends the session (returns) the same way `forward_control` ends its own loop on a read-side
+/// disconnect: the frame channel closing (producer gone) or a write error (client gone — an
+/// ordinary disconnect surfaces here as a broken-pipe/connection-reset error on `write_all`) both
+/// just mean the session is over, not that `serve()` failed, so neither is propagated via `?`.
+async fn write_frames(mut wr: OwnedWriteHalf, mut rx: watch::Receiver<FrameSlot>) {
     loop {
-        rx.changed().await.context("frame channel closed")?;
-        let frame = rx.borrow_and_update().clone();
-        if let Some((pts_ms, bytes)) = frame {
-            let framed = wire::encode(&Msg::Frame { pts_ms, bytes });
-            wr.write_all(&framed).await.context("write FRAME")?;
+        if rx.changed().await.is_err() {
+            break; // producer side gone — nothing left to feed.
+        }
+        let frame = rx.borrow_and_update().clone(); // Arc clone: O(1) refcount bump, not a copy.
+        if let Some(payload) = frame {
+            let framed = wire::encode_frame(payload.0, &payload.1);
+            if let Err(e) = wr.write_all(&framed).await {
+                eprintln!("[server] client disconnected (write FRAME: {e}) — ending session");
+                break;
+            }
         }
     }
 }

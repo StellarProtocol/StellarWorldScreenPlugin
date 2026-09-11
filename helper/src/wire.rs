@@ -59,11 +59,7 @@ pub fn encode(m: &Msg) -> Vec<u8> {
             body.push(*fps);
             push_str16(&mut body, title);
         }
-        Msg::Frame { pts_ms, bytes } => {
-            body.push(TYPE_FRAME);
-            body.extend_from_slice(&pts_ms.to_le_bytes());
-            body.extend_from_slice(bytes);
-        }
+        Msg::Frame { pts_ms, bytes } => return encode_frame(*pts_ms, bytes),
         Msg::Status { state, position_ms, duration_ms, err } => {
             body.push(TYPE_STATUS);
             body.push(*state);
@@ -76,6 +72,25 @@ pub fn encode(m: &Msg) -> Vec<u8> {
             push_control(&mut body, c);
         }
     }
+    envelope(body)
+}
+
+/// Encodes a FRAME message straight from a `pts_ms` + byte slice, without needing an owned
+/// `Msg::Frame` (whose `bytes: Vec<u8>` would otherwise force a clone of the frame's pixel buffer
+/// just to hand it to [`encode`]). Byte-for-byte identical wire output to
+/// `encode(&Msg::Frame { pts_ms, bytes: bytes.to_vec() })` — see `roundtrip_frame_preserves_pixel_bytes`
+/// and `encode_frame_matches_encode_msg_frame` in the tests below. Used by `server::write_frames` on
+/// the hot per-frame path, where `bytes` comes from an `Arc`-shared frame buffer.
+pub fn encode_frame(pts_ms: u64, bytes: &[u8]) -> Vec<u8> {
+    let mut body = Vec::with_capacity(1 + 8 + bytes.len());
+    body.push(TYPE_FRAME);
+    body.extend_from_slice(&pts_ms.to_le_bytes());
+    body.extend_from_slice(bytes);
+    envelope(body)
+}
+
+/// Wraps a message body (`type` byte + payload) in the `[u32 len_le]` length-prefix envelope.
+fn envelope(body: Vec<u8>) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + body.len());
     out.extend_from_slice(&(body.len() as u32).to_le_bytes());
     out.extend_from_slice(&body);
@@ -257,6 +272,18 @@ mod tests {
         let mut cur = std::io::Cursor::new(encode(&m));
         let back = read_msg(&mut cur).await.unwrap();
         assert_eq!(back, m);
+    }
+
+    #[tokio::test]
+    async fn encode_frame_matches_encode_msg_frame() {
+        // Pins that the slice-based fast path (`encode_frame`, used on the hot per-frame path to
+        // avoid cloning the frame buffer) produces byte-for-byte the same wire output as encoding a
+        // `Msg::Frame` the general way — the wire bytes must not change just because the caller
+        // stopped needing an owned `Vec<u8>`.
+        let pixels: Vec<u8> = (0u8..=255).collect();
+        let via_msg = encode(&Msg::Frame { pts_ms: 42, bytes: pixels.clone() });
+        let via_fast_path = encode_frame(42, &pixels);
+        assert_eq!(via_msg, via_fast_path);
     }
 
     #[tokio::test]
