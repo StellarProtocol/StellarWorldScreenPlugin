@@ -26,6 +26,7 @@ namespace Stellar.WorldScreen
         private readonly HelperClient _client;
         private readonly WorldScreenView _screen = new();
         private readonly string _exePath = HelperLauncher.ResolveExePath();
+        private readonly UI.OverlayPanel _overlay;
 
         private Action<float>? _update;
         private bool _placed;
@@ -38,10 +39,19 @@ namespace Stellar.WorldScreen
             _log = services.Log;
             _launcher = new HelperLauncher(_log.Info);
             _client = new HelperClient(_sink);
+            _overlay = new UI.OverlayPanel(services, LoadSource);
 
             // HelperClient events fire on its background thread — marshal to Unity's main thread.
-            _client.OnConnected += () => _services.Framework.Post(() => _log.Info("[WorldScreen] helper connected"));
-            _client.OnDisconnected += () => _services.Framework.Post(() => _log.Warning("[WorldScreen] helper disconnected"));
+            _client.OnConnected += () => _services.Framework.Post(() =>
+            {
+                _log.Info("[WorldScreen] helper connected");
+                _overlay.SetStatus("Helper: connected");
+            });
+            _client.OnDisconnected += () => _services.Framework.Post(() =>
+            {
+                _log.Warning("[WorldScreen] helper disconnected");
+                _overlay.SetStatus("Helper: reconnecting…");
+            });
             _client.OnStreamInfo += info => _services.Framework.Post(() => OnStreamInfo(info));
 
             _update = OnUpdate;
@@ -61,6 +71,7 @@ namespace Stellar.WorldScreen
         {
             if (string.IsNullOrWhiteSpace(sourceSpec)) return;
             _log.Info($"[WorldScreen] loading source: {sourceSpec}");
+            _overlay.SetStatus("Loading…");
             _launcher.Restart(_exePath, BuildArgs(sourceSpec));
         }
 
@@ -87,8 +98,9 @@ namespace Stellar.WorldScreen
         private void OnStreamInfo(StreamInfoMsg info)
         {
             _log.Info($"[WorldScreen] STREAM_INFO {info.W}x{info.H} pixfmt={info.Pixfmt} fps={info.Fps} '{info.Title}'");
+            _overlay.SetStatus($"Playing: {info.Title} ({info.W}x{info.H})");
             _screen.EnsureCreated(info.W, info.H);
-            _screen.SetVisible(false); // stays hidden until placed in-world
+            if (!_placed) _screen.SetVisible(false); // stays hidden until placed in-world (first stream only)
         }
 
         // Main-thread per-frame tick.
@@ -142,6 +154,7 @@ namespace Stellar.WorldScreen
         public void Dispose()
         {
             if (_update != null) { _services.Framework.Update -= _update; _update = null; }
+            try { _overlay.Remove(); } catch (Exception) { }
             try { _client.Dispose(); } catch (Exception) { }
             try { _launcher.Stop(); } catch (Exception) { }
             try { _screen.Destroy(); } catch (Exception) { }
