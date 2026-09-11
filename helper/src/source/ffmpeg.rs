@@ -110,10 +110,13 @@ impl FfmpegSource {
         let vf = format!("scale={w}:{h},fps={fps}");
 
         let mut cmd = Command::new(&ffmpeg_path);
-        cmd.arg("-hide_banner")
-            .arg("-loglevel")
-            .arg("error")
-            .arg("-re")
+        cmd.arg("-hide_banner").arg("-loglevel").arg("error");
+        if matches!(input, FfmpegInput::File(_)) {
+            // Loop local files forever so the screen never goes dark when a clip ends: without this,
+            // EOF ends the source → the helper exits → the plugin reconnects to a dead helper.
+            cmd.arg("-stream_loop").arg("-1");
+        }
+        cmd.arg("-re")
             .arg("-i")
             .arg(input_value)
             .arg("-an")
