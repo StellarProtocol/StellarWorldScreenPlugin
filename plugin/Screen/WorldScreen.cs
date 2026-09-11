@@ -58,17 +58,21 @@ namespace Stellar.WorldScreen.Screen
             _tex.Apply(false);
         }
 
-        /// <summary>Positions the screen a few metres ahead of the player at eye height, facing them.</summary>
-        public void PlaceInFrontOfPlayer(Vector3 playerPos, Vector3 camForward, float distance = 4f)
+        /// <summary>
+        /// Positions the screen <paramref name="distance"/> metres ahead of <paramref name="origin"/> along
+        /// the horizontal projection of <paramref name="forward"/>, facing back toward the origin. The caller
+        /// chooses the origin (e.g. the active camera's position, already at eye height).
+        /// </summary>
+        public void PlaceInFrontOf(Vector3 origin, Vector3 forward, float distance = 4f)
         {
             if (_root == null) return;
-            var fwd = camForward;
+            var fwd = forward;
             fwd.y = 0f;
             if (fwd.sqrMagnitude < 1e-4f) fwd = Vector3.forward;
             fwd.Normalize();
 
-            _root.transform.position = playerPos + fwd * distance + Vector3.up * 1.6f;
-            // A uGUI canvas is visible from its -Z side, so orient -Z toward the player (i.e. +Z along fwd).
+            _root.transform.position = origin + fwd * distance;
+            // A uGUI canvas renders on its +Z face; orient +Z along fwd so the visible side faces the origin.
             _root.transform.rotation = Quaternion.LookRotation(fwd, Vector3.up);
         }
 
