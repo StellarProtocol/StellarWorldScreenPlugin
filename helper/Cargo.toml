@@ -1,0 +1,17 @@
+[package]
+name = "stellar-castbox"
+version = "0.0.1"
+edition = "2021"
+description = "Video helper for StellarWorldScreen: decodes/receives video and streams raw frames to the in-game plugin over localhost TCP."
+publish = false
+
+[[bin]]
+name = "stellar-castbox"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "sync", "time"] }
+anyhow = "1"
+
+[profile.release]
+opt-level = 2

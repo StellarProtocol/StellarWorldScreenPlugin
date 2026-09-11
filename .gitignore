@@ -1,0 +1,16 @@
+# C# plugin
+plugin/bin/
+plugin/obj/
+plugin/tests/bin/
+plugin/tests/obj/
+*.user
+
+# Rust helper
+helper/target/
+
+# bundled Windows binaries (ffmpeg.exe / yt-dlp.exe) — fetched, not committed
+vendor/*.exe
+
+# verification artifacts
+*.png
+docs/verification-*.md.bak
