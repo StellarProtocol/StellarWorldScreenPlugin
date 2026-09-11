@@ -143,7 +143,16 @@ impl Source for FfmpegSource {
     }
 
     async fn next_frame(&mut self) -> Option<(u64, Vec<u8>)> {
-        let got_full_frame = read_rgba_frame(&mut self.stdout, self.w, self.h, &mut self.buf).await.ok()?;
+        let got_full_frame = match read_rgba_frame(&mut self.stdout, self.w, self.h, &mut self.buf).await {
+            Ok(v) => v,
+            Err(e) => {
+                // Distinguish "something broke" from a clean finish — stderr is nulled, so this is
+                // the only signal ffmpeg failed rather than the video simply ending (parity with
+                // server.rs's disconnect logging).
+                eprintln!("[ffmpeg source] read error, ending stream: {e}");
+                return None;
+            }
+        };
         if !got_full_frame {
             return None; // clean EOF or a torn trailing chunk — video ended either way.
         }
