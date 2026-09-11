@@ -56,6 +56,13 @@ namespace Stellar.WorldScreen.Net
             }
         }
 
+        /// <summary>Stops the current helper (if any) and relaunches it with new args (e.g. a new source).</summary>
+        public void Restart(string exePath, string args)
+        {
+            Stop();
+            EnsureRunning(exePath, args);
+        }
+
         /// <summary>Kills the launched helper if it is still alive. Idempotent.</summary>
         public void Stop()
         {

@@ -17,7 +17,7 @@ namespace Stellar.WorldScreen
     {
         private const string HelperHost = "127.0.0.1";
         private const int HelperPort = 47800;
-        private const string HelperArgs = "--listen 127.0.0.1:47800 --source testpattern";
+        private const string ListenArg = "--listen 127.0.0.1:47800";
 
         private readonly IPluginServices _services;
         private readonly IPluginLog _log;
@@ -25,6 +25,7 @@ namespace Stellar.WorldScreen
         private readonly HelperLauncher _launcher;
         private readonly HelperClient _client;
         private readonly WorldScreenView _screen = new();
+        private readonly string _exePath = HelperLauncher.ResolveExePath();
 
         private Action<float>? _update;
         private bool _placed;
@@ -46,10 +47,40 @@ namespace Stellar.WorldScreen
             _update = OnUpdate;
             _services.Framework.Update += _update;
 
-            var exe = HelperLauncher.ResolveExePath();
-            _log.Info($"[WorldScreen] launching helper: {exe}");
-            _launcher.EnsureRunning(exe, HelperArgs);
+            _log.Info($"[WorldScreen] launching helper: {_exePath}");
+            _launcher.EnsureRunning(_exePath, BuildArgs(ResolveInitialSource()));
             _client.Start(HelperHost, HelperPort);
+        }
+
+        /// <summary>
+        /// Loads a new source at runtime by relaunching the helper with it. <paramref name="sourceSpec"/> is
+        /// "testpattern", "file:&lt;path&gt;", or "url:&lt;url&gt;". The screen keeps its placement; the client
+        /// auto-reconnects to the relaunched helper and the new STREAM_INFO/frames take over.
+        /// </summary>
+        public void LoadSource(string sourceSpec)
+        {
+            if (string.IsNullOrWhiteSpace(sourceSpec)) return;
+            _log.Info($"[WorldScreen] loading source: {sourceSpec}");
+            _launcher.Restart(_exePath, BuildArgs(sourceSpec));
+        }
+
+        // Builds the helper command line for a source spec (source value quoted to tolerate spaces).
+        private static string BuildArgs(string sourceSpec) => $"{ListenArg} --source \"{sourceSpec}\"";
+
+        // Default source: a bundled demo clip (test-clip.mp4) next to the helper if present, else the pattern.
+        private string ResolveInitialSource()
+        {
+            try
+            {
+                var dir = System.IO.Path.GetDirectoryName(_exePath);
+                if (!string.IsNullOrEmpty(dir))
+                {
+                    var clip = System.IO.Path.Combine(dir, "test-clip.mp4");
+                    if (System.IO.File.Exists(clip)) return "file:" + clip;
+                }
+            }
+            catch (Exception) { }
+            return "testpattern";
         }
 
         // Main thread (posted).
