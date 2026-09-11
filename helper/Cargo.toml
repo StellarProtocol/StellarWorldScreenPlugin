@@ -10,7 +10,7 @@ name = "stellar-castbox"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "sync", "time", "process"] }
 anyhow = "1"
 
 [profile.release]

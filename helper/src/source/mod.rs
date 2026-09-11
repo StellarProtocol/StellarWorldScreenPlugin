@@ -3,6 +3,7 @@
 //! (never as `dyn Source`) — Milestone A has exactly one live source, so the native `async fn` below
 //! doesn't need to be object-safe.
 
+pub mod ffmpeg;
 pub mod testpattern;
 
 /// Stream metadata sent to the plugin as STREAM_INFO right after HELLO (`docs/protocol.md`).
