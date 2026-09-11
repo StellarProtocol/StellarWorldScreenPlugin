@@ -19,8 +19,9 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
   <ItemGroup>
-    <!-- The one production file under test — compiled directly into this test assembly (not via
+    <!-- The production files under test — compiled directly into this test assembly (not via
          ProjectReference to Stellar.WorldScreen.csproj, which pulls in Abstractions/InteropRefs). -->
     <Compile Include="../Net/WireCodec.cs" />
+    <Compile Include="../Screen/FrameSink.cs" />
   </ItemGroup>
 </Project>
