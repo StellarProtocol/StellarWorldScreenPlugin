@@ -4,7 +4,7 @@
 // May reference System.* only — no UnityEngine. Runs entirely on its own background thread; the plugin
 // marshals event callbacks onto Unity's main thread via IFramework.Post.
 using System;
-using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
 using System.Threading;
@@ -15,21 +15,28 @@ namespace Stellar.WorldScreen.Net;
 /// <summary>
 /// Connects to the stellar-castbox helper over localhost TCP, sends HELLO, then decodes H→P messages via
 /// <see cref="WireReader"/>: FRAME copies into the shared <see cref="FrameSink"/>; STREAM_INFO/STATUS
-/// raise events. One background thread owns the whole lifecycle (connect, HELLO, read, queued CONTROL
-/// sends) and retries with a bounded backoff on any failure until <see cref="Dispose"/>.
+/// raise events. One background thread owns the connect/HELLO/read lifecycle and retries with a bounded
+/// backoff on any failure until <see cref="Dispose"/>. TCP is full-duplex, so <see cref="Send"/> writes
+/// directly from the caller's thread under a write-lock rather than queuing onto the read thread — see
+/// the type-level remarks on <c>_writeLock</c>/<c>_writeStream</c> below.
 /// </summary>
 public sealed class HelperClient : IDisposable
 {
     private const int InitialBackoffMs = 1000;
     private const int MaxBackoffMs = 5000;
-    private const int ReadPollTimeoutMs = 200;
 
     private readonly FrameSink _sink;
-    private readonly ConcurrentQueue<byte[]> _outbox = new();
+
+    // Guards _writeStream: Send() (any caller thread) and the bg thread's HELLO write both take this
+    // lock before touching the stream, so a write from either side is never interleaved with the other.
+    // TCP allows one concurrent read and one concurrent write on the same NetworkStream, so this lock
+    // only ever contends with itself — never with the (unlocked) bg read loop.
+    private readonly object _writeLock = new();
+    private NetworkStream? _writeStream; // guarded by _writeLock; null whenever not connected
 
     private Thread? _thread;
     private volatile bool _disposed;
-    private TcpClient? _activeClient;
+    private volatile TcpClient? _activeClient;
 
     /// <summary>Raised on the background thread when a STREAM_INFO message is decoded.</summary>
     public event Action<StreamInfoMsg>? OnStreamInfo;
@@ -48,7 +55,7 @@ public sealed class HelperClient : IDisposable
         _sink = sink ?? throw new ArgumentNullException(nameof(sink));
     }
 
-    /// <summary>Spawns the background connect/read/write thread. Call once; a second call is ignored.</summary>
+    /// <summary>Spawns the background connect/read thread. Call once; a second call is ignored.</summary>
     public void Start(string host, int port)
     {
         if (_thread != null) return;
@@ -61,9 +68,10 @@ public sealed class HelperClient : IDisposable
     }
 
     /// <summary>
-    /// Enqueues a CONTROL message for the background thread to send on its next loop iteration. Safe to
-    /// call from any thread concurrently with the read loop. A control that races a disconnect (queued
-    /// but never sent before the socket drops) is silently dropped, never thrown.
+    /// Encodes and writes a CONTROL message directly to the live connection under <c>_writeLock</c>. Safe
+    /// to call from any thread concurrently with the background read loop (full-duplex TCP). If not
+    /// currently connected, or the write itself fails (e.g. the peer just dropped), the message is
+    /// dropped — logged, never thrown on the caller's thread and never queued for a later connection.
     /// </summary>
     public void Send(ControlOp op, ulong seekMs = 0, byte volume = 0, string? url = null)
     {
@@ -78,7 +86,26 @@ public sealed class HelperClient : IDisposable
             return; // unknown/malformed op — drop rather than throw on the caller's thread
         }
 
-        _outbox.Enqueue(encoded);
+        lock (_writeLock)
+        {
+            if (_writeStream == null)
+            {
+                Trace.WriteLine($"[HelperClient] Send({op}): dropped — not connected");
+                return;
+            }
+
+            try
+            {
+                _writeStream.Write(encoded, 0, encoded.Length);
+            }
+            catch (Exception ex)
+            {
+                // Peer dropped the connection between the null-check and this write — drop, never throw.
+                // The read loop will independently observe the same disconnect and raise OnDisconnected.
+                _writeStream = null;
+                Trace.WriteLine($"[HelperClient] Send({op}): dropped — write failed: {ex.Message}");
+            }
+        }
     }
 
     /// <summary>Stops the background thread and closes the socket. Idempotent.</summary>
@@ -86,6 +113,10 @@ public sealed class HelperClient : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        ClearWriteStream();
+        // Closing the socket aborts an in-progress blocking Connect/Read on the bg thread (localhost
+        // connect is effectively instant-or-refused, so there's no realistic long-running Connect to
+        // race here); Join(2s) bounds how long the disposer can be stalled waiting for that to unwind.
         CloseActiveSocket();
         _thread?.Join(TimeSpan.FromSeconds(2));
     }
@@ -105,9 +136,9 @@ public sealed class HelperClient : IDisposable
     }
 
     /// <summary>
-    /// Connects once and runs the send/receive loop until failure or disposal. Never throws — every
-    /// failure (connect refused, socket error, malformed message) is caught and treated as "disconnected,
-    /// retry later". Returns whether a connection was actually established.
+    /// Connects once and runs the blocking read loop until failure, clean EOF, or disposal. Never throws —
+    /// every failure (connect refused, HELLO write error, socket error, malformed message) is caught and
+    /// treated as "disconnected, retry later". Returns whether a connection was actually established.
     /// </summary>
     private bool RunOneConnection(string host, int port)
     {
@@ -123,24 +154,38 @@ public sealed class HelperClient : IDisposable
             OnConnected?.Invoke();
 
             var stream = client.GetStream();
-            stream.ReadTimeout = ReadPollTimeoutMs;
-            stream.Write(WireCodec.EncodeHello(1, 0));
+            lock (_writeLock)
+            {
+                // Same _writeLock path Send() uses: write HELLO, then publish the stream so Send() can
+                // never race ahead of the handshake (_writeStream is null until this line runs).
+                stream.Write(WireCodec.EncodeHello(1, 0));
+                _writeStream = stream;
+            }
 
-            ReadLoop(client, stream);
+            ReadLoop(stream);
         }
         catch (Exception)
         {
-            // Connect failure / socket error / protocol error — uniformly "disconnected, retry later".
+            // Connect failure / HELLO write failure / socket error / protocol error — uniformly
+            // "disconnected, retry later".
         }
         finally
         {
+            ClearWriteStream();
             CloseActiveSocket();
         }
 
         return connected;
     }
 
-    private void ReadLoop(TcpClient client, NetworkStream stream)
+    /// <summary>
+    /// Blocking read loop: no <see cref="NetworkStream.ReadTimeout"/> is set, so a slow/chunked sender
+    /// never causes a mid-message timeout that would desync <see cref="WireReader"/>'s framing. The only
+    /// ways out are a clean EOF/partial-at-disconnect (<see cref="WireReader.TryReadMessage"/> returns
+    /// <c>false</c>) or an exception (e.g. <see cref="Dispose"/> closing the socket), both handled by the
+    /// caller.
+    /// </summary>
+    private void ReadLoop(NetworkStream stream)
     {
         var reader = new WireReader();
         ushort lastW = 0;
@@ -149,11 +194,7 @@ public sealed class HelperClient : IDisposable
 
         while (!_disposed)
         {
-            DrainOutbox(stream);
-
-            var outcome = TryReadOneMessage(reader, stream, out var msg);
-            if (outcome == ReadOutcome.Timeout) continue; // poll tick — service the outbox again
-            if (outcome == ReadOutcome.Eof) return; // disconnect — outer loop retries with backoff
+            if (!reader.TryReadMessage(stream, out var msg)) return; // EOF/disconnect — outer loop retries
 
             Dispatch(msg, ref lastW, ref lastH, ref lastPixfmt);
         }
@@ -180,39 +221,11 @@ public sealed class HelperClient : IDisposable
         }
     }
 
-    private enum ReadOutcome
+    private void ClearWriteStream()
     {
-        Message,
-        Timeout,
-        Eof,
-    }
-
-    /// <summary>
-    /// Wraps <see cref="WireReader.TryReadMessage"/> so a read-timeout poll tick (expected —
-    /// <see cref="NetworkStream.ReadTimeout"/> is set so the loop can also service the outbox while
-    /// idle) is distinguished from a real EOF/disconnect.
-    /// </summary>
-    private static ReadOutcome TryReadOneMessage(WireReader reader, NetworkStream stream, out WireMessage msg)
-    {
-        try
+        lock (_writeLock)
         {
-            return reader.TryReadMessage(stream, out msg) ? ReadOutcome.Message : ReadOutcome.Eof;
-        }
-        catch (IOException io) when (IsTimeout(io))
-        {
-            msg = default;
-            return ReadOutcome.Timeout;
-        }
-    }
-
-    private static bool IsTimeout(IOException io) =>
-        io.InnerException is SocketException se && se.SocketErrorCode == SocketError.TimedOut;
-
-    private void DrainOutbox(NetworkStream stream)
-    {
-        while (_outbox.TryDequeue(out var encoded))
-        {
-            stream.Write(encoded, 0, encoded.Length);
+            _writeStream = null;
         }
     }
 
