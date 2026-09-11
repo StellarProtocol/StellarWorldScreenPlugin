@@ -47,7 +47,9 @@ namespace Stellar.WorldScreen.Net
             try
             {
                 _proc = Process.Start(psi);
-                _log?.Invoke($"[HelperLauncher] started {Path.GetFileName(exePath)} pid={_proc?.Id} args='{args}'");
+                // NB: do NOT log `args` — it embeds the --source, which for a url: source can carry an
+                // auth token. The plugin logs the redacted source separately.
+                _log?.Invoke($"[HelperLauncher] started {Path.GetFileName(exePath)} pid={_proc?.Id}");
             }
             catch (Exception ex)
             {

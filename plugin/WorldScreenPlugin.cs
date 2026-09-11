@@ -57,8 +57,9 @@ namespace Stellar.WorldScreen
             _update = OnUpdate;
             _services.Framework.Update += _update;
 
-            _log.Info($"[WorldScreen] launching helper: {_exePath}");
-            _launcher.EnsureRunning(_exePath, BuildArgs(ResolveInitialSource()));
+            var initialSource = ResolveInitialSource();
+            _log.Info($"[WorldScreen] launching helper: {_exePath} (source: {RedactSource(initialSource)})");
+            _launcher.EnsureRunning(_exePath, BuildArgs(initialSource));
             _client.Start(HelperHost, HelperPort);
         }
 
@@ -70,13 +71,26 @@ namespace Stellar.WorldScreen
         public void LoadSource(string sourceSpec)
         {
             if (string.IsNullOrWhiteSpace(sourceSpec)) return;
-            _log.Info($"[WorldScreen] loading source: {sourceSpec}");
+            _log.Info($"[WorldScreen] loading source: {RedactSource(sourceSpec)}");
             _overlay.SetStatus("Loading…");
             _launcher.Restart(_exePath, BuildArgs(sourceSpec));
         }
 
         // Builds the helper command line for a source spec (source value quoted to tolerate spaces).
         private static string BuildArgs(string sourceSpec) => $"{ListenArg} --source \"{sourceSpec}\"";
+
+        // Redacts a source for logging: a url: source can carry an auth token in its query/path, so we
+        // log only scheme+host (mirrors the helper's scheme_and_host). file:/testpattern log as-is.
+        private static string RedactSource(string spec)
+        {
+            if (!spec.StartsWith("url:", StringComparison.Ordinal)) return spec;
+            var u = spec.Substring(4);
+            var i = u.IndexOf("://", StringComparison.Ordinal);
+            if (i <= 0) return "url:<url>";
+            var afterScheme = u.Substring(i + 3);
+            var host = afterScheme.Split('/', '?', '#')[0];
+            return $"url:{u.Substring(0, i)}://{host}";
+        }
 
         // Default source: a bundled demo clip (test-clip.mp4) next to the helper if present, else the pattern.
         private string ResolveInitialSource()
