@@ -39,6 +39,34 @@ cargo zigbuild --release --target x86_64-pc-windows-gnu # in helper/
 
 Native unit/integration tests use the host toolchain: `cargo test` (no zig needed).
 
-## Status
+## Status (2026-09-12)
 
-Phase 1, Milestone A (de-risk spike) — in progress. See the plan's milestone checklist.
+**Milestone A (de-risk spike): DONE** — the world-space video screen renders in-game (owner-confirmed).
+**Milestone B (real video): functionally complete (minus audio)** — the helper decodes real video and the
+plugin plays it on the world screen. Sources supported, all drivable from the in-game overlay:
+
+- **Local file** (loops forever) — a bundled `test-clip.mp4` auto-plays if present next to the helper.
+- **Direct URL** (mp4 / HLS / …).
+- **YouTube URL** (resolved via bundled `yt-dlp.exe`).
+
+Verified: real H.264 decodes + loops under the game's Proton prefix (800+ frames past 25s); a YouTube URL
+resolves + decodes end-to-end under Wine (800+ frames); the control overlay works in-game
+(status line + URL/path input + Load/Stop). **Audio is not wired yet** (video only — `-an`).
+
+### Try it in-game (owner)
+
+1. Deploy: `scripts/deploy.sh` (builds plugin + helper, fetches ffmpeg/yt-dlp, copies to the lowercase
+   `stellar/plugins/worldscreen/` slot). Already deployed to the **test prefix**.
+2. Launch the test client and reach the world. The screen auto-plays the bundled demo clip (looping).
+3. Open the **World Screen** overlay window, paste a video URL or file path, hit **Load**. **Stop / Pattern**
+   returns to the test pattern.
+
+### Not done yet
+
+- **Audio** (Milestone B3) — needs your ears to verify sound under Proton; deliberately deferred.
+- A clean in-world screenshot of a real clip on the 3D screen (a transient game login flake blocked the
+  last capture; an earlier run placed the screen fine).
+- Milestones C (placement move/rotate/scale), D (real Chromecast receiver), E (polish).
+
+See `../../docs/superpowers/plans/2026-09-11-world-screen-video-cast.md` and the session ledger
+`../../.superpowers/sdd/progress.md` for the full trail.
