@@ -23,7 +23,7 @@ const DEFAULT_FPS: u8 = 30;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse(std::env::args().skip(1));
-    eprintln!("stellar-castbox {} — listening on {} (source: {})", env!("CARGO_PKG_VERSION"), args.listen, args.source);
+    eprintln!("stellar-castbox {} — listening on {} (source: {})", env!("CARGO_PKG_VERSION"), args.listen, redact_source(&args.source));
 
     let (control_tx, mut control_rx) = tokio::sync::mpsc::channel::<Control>(16);
     tokio::spawn(async move {
@@ -69,6 +69,15 @@ async fn main() -> anyhow::Result<()> {
             server::serve(args.listen, source, control_tx).await
         }
         other => anyhow::bail!("unknown --source '{other}' (expected: testpattern, file:<path>, url:<u>)"),
+    }
+}
+
+/// Redacts a `--source` value for the startup banner: a `url:` source can carry an auth token in its
+/// query/path (B2 review), so we log only its scheme+host. `file:`/`testpattern` are logged as-is.
+fn redact_source(source: &str) -> String {
+    match source.strip_prefix("url:") {
+        Some(rest) => format!("url:{}", scheme_and_host(rest)),
+        None => source.to_string(),
     }
 }
 
