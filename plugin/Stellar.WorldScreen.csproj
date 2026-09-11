@@ -12,7 +12,11 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Stellar.Abstractions" Version="2.8.0" />
+    <!-- Pinned to 2.7.0 to match the framework DEPLOYED in the test prefix
+         (release_3.7/.../Stellar.Framework/.stellar-version = 2.7.0). Referencing a higher
+         Abstractions than the deployed framework ships risks an assembly-bind failure at load;
+         WorldScreen uses only long-stable interfaces present in 2.7.0. -->
+    <PackageReference Include="Stellar.Abstractions" Version="2.7.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
   </ItemGroup>
   <ItemGroup>
