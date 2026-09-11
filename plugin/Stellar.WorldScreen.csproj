@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <NoWarn>CS8632;CS8765</NoWarn>
+    <RootNamespace>Stellar.WorldScreen</RootNamespace>
+    <AssemblyName>Stellar.WorldScreen</AssemblyName>
+    <Version>0.1.0</Version>
+    <Deterministic>true</Deterministic>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Stellar.Abstractions" Version="2.8.0" />
+    <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="tests/**/*.cs" />
+    <InternalsVisibleTo Include="Stellar.WorldScreen.Tests" />
+  </ItemGroup>
+</Project>

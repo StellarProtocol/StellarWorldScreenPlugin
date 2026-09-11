@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Deliberately does NOT reference Stellar.Abstractions / Stellar.Plugin.InteropRefs / UnityEngine —
+       it compiles the WireCodec source directly (below) so the wire-protocol codec is unit-testable
+       off-game with plain `dotnet test`. See ../Net/WireCodec.cs's own header comment. -->
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <NoWarn>CS8632;CS8765</NoWarn>
+    <!-- No net6.0 shared runtime is installed here (only 8.0.x/10.0.x) — roll the test host forward to
+         whatever major is present so `dotnet test` actually executes instead of failing to launch. -->
+    <RollForward>LatestMajor</RollForward>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The one production file under test — compiled directly into this test assembly (not via
+         ProjectReference to Stellar.WorldScreen.csproj, which pulls in Abstractions/InteropRefs). -->
+    <Compile Include="../Net/WireCodec.cs" />
+  </ItemGroup>
+</Project>
