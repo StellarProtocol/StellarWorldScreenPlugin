@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use stellar_castbox::server;
 use stellar_castbox::source::ffmpeg::{FfmpegInput, FfmpegSource};
+use stellar_castbox::source::resolve::{is_direct_media_url, resolve_via_ytdlp, scheme_and_host};
 use stellar_castbox::source::testpattern::TestPattern;
 use stellar_castbox::wire::Control;
 
@@ -44,10 +45,27 @@ async fn main() -> anyhow::Result<()> {
             server::serve(args.listen, source, control_tx).await
         }
         other if other.starts_with("url:") => {
-            let url = other["url:".len()..].to_string();
+            let raw_url = other["url:".len()..].to_string();
             let ffmpeg_path = resolve_ffmpeg_path(args.ffmpeg.as_deref())?;
-            let source =
-                FfmpegSource::spawn(FfmpegInput::Url(url), DEFAULT_W, DEFAULT_H, DEFAULT_FPS, ffmpeg_path)?;
+            let direct_url = if is_direct_media_url(&raw_url) {
+                raw_url
+            } else {
+                let ytdlp_path = resolve_ytdlp_path(args.ytdlp.as_deref())?;
+                let resolved = resolve_via_ytdlp(&raw_url, &ytdlp_path).await?;
+                eprintln!(
+                    "[resolve] yt-dlp {} -> {}",
+                    scheme_and_host(&raw_url),
+                    scheme_and_host(&resolved)
+                );
+                resolved
+            };
+            let source = FfmpegSource::spawn(
+                FfmpegInput::Url(direct_url),
+                DEFAULT_W,
+                DEFAULT_H,
+                DEFAULT_FPS,
+                ffmpeg_path,
+            )?;
             server::serve(args.listen, source, control_tx).await
         }
         other => anyhow::bail!("unknown --source '{other}' (expected: testpattern, file:<path>, url:<u>)"),
@@ -76,12 +94,37 @@ fn resolve_ffmpeg_path(override_path: Option<&str>) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-/// Minimal hand-rolled CLI (`--listen ADDR`, `--source NAME`, `--ffmpeg PATH`) — not worth an extra
-/// dependency for three flags.
+/// Resolves the `yt-dlp.exe` to run when a `url:` source isn't a direct media URL (per
+/// `is_direct_media_url`): `--ytdlp <path>` if given, else `stellar-castbox.exe`'s own sibling
+/// `yt-dlp.exe` (the bundled layout). Only called when a resolve is actually needed, so a direct
+/// `url:`/`file:` source never requires yt-dlp to be present. Errors clearly when the resolved path
+/// doesn't exist, so a missing bundle is obvious rather than surfacing as an opaque spawn failure.
+fn resolve_ytdlp_path(override_path: Option<&str>) -> anyhow::Result<PathBuf> {
+    let path = match override_path {
+        Some(p) => PathBuf::from(p),
+        None => std::env::current_exe()
+            .context("resolve current exe path")?
+            .parent()
+            .context("current exe has no parent directory")?
+            .join("yt-dlp.exe"),
+    };
+    if !path.exists() {
+        anyhow::bail!(
+            "yt-dlp not found at {} (bundle is missing yt-dlp.exe next to stellar-castbox.exe, \
+             or pass --ytdlp <path>) — required to resolve a non-direct url: source",
+            path.display()
+        );
+    }
+    Ok(path)
+}
+
+/// Minimal hand-rolled CLI (`--listen ADDR`, `--source NAME`, `--ffmpeg PATH`, `--ytdlp PATH`) —
+/// not worth an extra dependency for four flags.
 struct Args {
     listen: SocketAddr,
     source: String,
     ffmpeg: Option<String>,
+    ytdlp: Option<String>,
 }
 
 impl Args {
@@ -89,6 +132,7 @@ impl Args {
         let mut listen: SocketAddr = DEFAULT_LISTEN.parse().expect("default listen addr is valid");
         let mut source = "testpattern".to_string();
         let mut ffmpeg = None;
+        let mut ytdlp = None;
         let mut it = args;
         while let Some(arg) = it.next() {
             match arg.as_str() {
@@ -102,9 +146,12 @@ impl Args {
                 "--ffmpeg" => {
                     ffmpeg = Some(it.next().expect("--ffmpeg requires a path"));
                 }
+                "--ytdlp" => {
+                    ytdlp = Some(it.next().expect("--ytdlp requires a path"));
+                }
                 other => eprintln!("warning: ignoring unknown argument '{other}'"),
             }
         }
-        Self { listen, source, ffmpeg }
+        Self { listen, source, ffmpeg, ytdlp }
     }
 }

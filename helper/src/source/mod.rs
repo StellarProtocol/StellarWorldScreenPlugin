@@ -4,6 +4,7 @@
 //! doesn't need to be object-safe.
 
 pub mod ffmpeg;
+pub mod resolve;
 pub mod testpattern;
 
 /// Stream metadata sent to the plugin as STREAM_INFO right after HELLO (`docs/protocol.md`).
