@@ -8,6 +8,12 @@
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
+/// Maximum allowed message length (the `[u32 len]` prefix, counting `type` + payload). Guards
+/// `read_msg` against allocating an unbounded buffer from a corrupt/hostile length prefix on the
+/// wire — comfortably larger than a default 640×360 RGBA FRAME (~922 KB) with headroom for bigger
+/// resolutions. Not a formatted part of the wire bytes; purely a receiver-side sanity cap.
+pub const MAX_MSG_LEN: usize = 64 * 1024 * 1024; // 64 MiB
+
 /// Message type byte, `docs/protocol.md` table.
 pub const TYPE_HELLO: u8 = 0x01;
 pub const TYPE_STREAM_INFO: u8 = 0x02;
@@ -109,6 +115,12 @@ pub async fn read_msg<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<Msg> {
     let mut len_buf = [0u8; 4];
     r.read_exact(&mut len_buf).await?;
     let len = u32::from_le_bytes(len_buf) as usize;
+    if len > MAX_MSG_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("message length {len} exceeds MAX_MSG_LEN ({MAX_MSG_LEN})"),
+        ));
+    }
     let mut body = vec![0u8; len];
     r.read_exact(&mut body).await?;
     parse_body(&body)
@@ -298,5 +310,18 @@ mod tests {
     async fn roundtrip_control_volume() {
         let mut cur = std::io::Cursor::new(encode(&Msg::Control(Control::Volume(80))));
         assert_eq!(read_msg(&mut cur).await.unwrap(), Msg::Control(Control::Volume(80)));
+    }
+
+    #[tokio::test]
+    async fn read_msg_rejects_oversized_length_prefix() {
+        // A length prefix bigger than MAX_MSG_LEN, with no body bytes following. If `read_msg`
+        // allocated `len` bytes and tried to read them before checking the cap, this would fail
+        // with UnexpectedEof (or hang on a real socket) instead of the cap's InvalidData — so
+        // asserting the InvalidData kind proves the cap is checked before the read/allocation.
+        let huge_len = (MAX_MSG_LEN as u32).saturating_add(1);
+        let bytes = huge_len.to_le_bytes().to_vec();
+        let mut cur = std::io::Cursor::new(bytes);
+        let err = read_msg(&mut cur).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 }

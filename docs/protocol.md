@@ -36,6 +36,10 @@ The reader reads a 4-byte little-endian `len`, then exactly `len` bytes; the fir
 - `pixfmt`: `0 = RGBA` (bpp 4). (Room reserved for `1 = YUV420P`, bpp 1.5 — not used in Phase 1.)
 - Default stream: `640 × 360`, RGBA, `30` fps.
 - Default listen address: `127.0.0.1:47800`.
+- Max message length (either direction): any reader of the `[u32 len]` prefix MUST reject a message
+  whose `len` exceeds a sane cap (the Rust helper uses `wire::MAX_MSG_LEN = 64 MiB`) before allocating
+  a buffer for the body — a corrupt/hostile length prefix must not trigger an unbounded allocation.
+  Not a wire-format change; a receiver-side sanity check both implementations should apply.
 
 ### Latest-wins
 
