@@ -43,11 +43,14 @@ pub fn scheme_and_host(u: &str) -> String {
     }
 }
 
-/// VIDEO format selector: prefer cheap-to-decode H.264 (avc1) at ≤480p — we downscale every source to
-/// 640×360 anyway, so pulling a heavy av01/4K stream only causes playback lag for no visual gain. Falls
-/// back to a combined ≤480, any video ≤480, best combined, best video. `FfmpegSource` decodes with `-an`
-/// (audio is played separately via ffplay), so a video-only URL is fine.
-pub const YTDLP_VIDEO_SELECTOR: &str = "bv*[height<=?480][vcodec^=avc1]/b[height<=?480]/bv*[height<=?480]/b/bv*";
+/// Builds the VIDEO format selector for a render height of `max_h`: prefer cheap-to-decode H.264 (avc1)
+/// at ≤`max_h`p — we downscale every source to the render size anyway, so a heavy av01/4K stream only
+/// causes playback lag for no visual gain. Falls back to a combined ≤max_h, any video ≤max_h, best
+/// combined, best video. `FfmpegSource` decodes with `-an` (audio is played separately via ffplay), so
+/// a video-only URL is fine.
+pub fn video_selector(max_h: u16) -> String {
+    format!("bv*[height<=?{max_h}][vcodec^=avc1]/b[height<=?{max_h}]/bv*[height<=?{max_h}]/b/bv*")
+}
 
 /// AUDIO format selector (for ffplay): best audio-only stream (opus/aac), else best combined (carries
 /// audio). Many YouTube videos have NO combined format, so the video selector above returns a video-only
@@ -285,7 +288,7 @@ mod fake_ytdlp_tests {
         let fake = write_fake_ytdlp_ok("ok", &capture, "https://cdn.example.com/direct.mp4");
 
         let resolved = resolve_via_ytdlp_tolerating_sandbox_etxtbsy(
-            "https://youtube.com/watch?v=abc", &fake, YTDLP_VIDEO_SELECTOR)
+            "https://youtube.com/watch?v=abc", &fake, &video_selector(480))
             .await
             .expect("fake yt-dlp should resolve");
         assert_eq!(resolved, "https://cdn.example.com/direct.mp4");
@@ -306,7 +309,7 @@ mod fake_ytdlp_tests {
         let fake = write_fake_ytdlp_fail("fail", "ERROR: ffmpeg exited with an error");
 
         let err = resolve_via_ytdlp_tolerating_sandbox_etxtbsy(
-            "https://youtube.com/watch?v=dead", &fake, YTDLP_VIDEO_SELECTOR)
+            "https://youtube.com/watch?v=dead", &fake, &video_selector(480))
             .await
             .expect_err("non-zero exit must be an error");
         assert!(
@@ -322,7 +325,7 @@ mod fake_ytdlp_tests {
         let fake = write_fake_ytdlp_empty_stdout("empty");
 
         let err = resolve_via_ytdlp_tolerating_sandbox_etxtbsy(
-            "https://youtube.com/watch?v=blank", &fake, YTDLP_VIDEO_SELECTOR)
+            "https://youtube.com/watch?v=blank", &fake, &video_selector(480))
             .await
             .expect_err("empty stdout must be an error even on exit 0");
         assert!(err.to_string().contains("no URL"), "unexpected error: {err}");

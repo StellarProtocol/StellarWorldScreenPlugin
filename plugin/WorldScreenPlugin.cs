@@ -31,6 +31,16 @@ namespace Stellar.WorldScreen
         private Action<float>? _update;
         private bool _placed;
 
+        // Render-quality presets (label, width, height); the index is the overlay dropdown selection.
+        private static readonly (string Label, int W, int H)[] Qualities =
+        {
+            ("360p", 640, 360),
+            ("480p", 854, 480),
+            ("720p", 1280, 720),
+        };
+        private int _quality;                          // index into Qualities (0 = 360p default)
+        private string _currentSource = "testpattern"; // last-loaded source, so a quality change reloads it
+
         public string Name => "World Screen";
 
         public WorldScreenPlugin(IPluginServices services)
@@ -39,7 +49,7 @@ namespace Stellar.WorldScreen
             _log = services.Log;
             _launcher = new HelperLauncher(_log.Info);
             _client = new HelperClient(_sink);
-            _overlay = new UI.OverlayPanel(services, LoadSource, HandleControl);
+            _overlay = new UI.OverlayPanel(services, LoadSource, HandleControl, QualityLabels(), () => _quality, SetQuality);
 
             // HelperClient events fire on its background thread — marshal to Unity's main thread.
             _client.OnConnected += () => _services.Framework.Post(() =>
@@ -58,6 +68,7 @@ namespace Stellar.WorldScreen
             _services.Framework.Update += _update;
 
             var initialSource = ResolveInitialSource();
+            _currentSource = initialSource;
             _log.Info($"[WorldScreen] launching helper: {_exePath} (source: {RedactSource(initialSource)})");
             _launcher.EnsureRunning(_exePath, BuildArgs(initialSource));
             _client.Start(HelperHost, HelperPort);
@@ -71,6 +82,7 @@ namespace Stellar.WorldScreen
         public void LoadSource(string sourceSpec)
         {
             if (string.IsNullOrWhiteSpace(sourceSpec)) return;
+            _currentSource = sourceSpec;
             _log.Info($"[WorldScreen] loading source: {RedactSource(sourceSpec)}");
             _overlay.SetStatus("Loading…");
             _launcher.Restart(_exePath, BuildArgs(sourceSpec));
@@ -91,8 +103,25 @@ namespace Stellar.WorldScreen
             }
         }
 
-        // Builds the helper command line for a source spec (source value quoted to tolerate spaces).
-        private static string BuildArgs(string sourceSpec) => $"{ListenArg} --source \"{sourceSpec}\"";
+        // Builds the helper command line for a source spec at the current quality (source value quoted).
+        private string BuildArgs(string sourceSpec)
+        {
+            var q = Qualities[_quality];
+            return $"{ListenArg} --width {q.W} --height {q.H} --source \"{sourceSpec}\"";
+        }
+
+        /// <summary>Overlay dropdown: switch render quality and reload the current source at that resolution.</summary>
+        public void SetQuality(int index)
+        {
+            if (index < 0 || index >= Qualities.Length || index == _quality) return;
+            _quality = index;
+            _log.Info($"[WorldScreen] quality -> {Qualities[index].Label}");
+            LoadSource(_currentSource);
+        }
+
+        /// <summary>Quality dropdown labels + current index, for the overlay.</summary>
+        public static string[] QualityLabels() => System.Array.ConvertAll(Qualities, q => q.Label);
+        public int Quality => _quality;
 
         // Redacts a source for logging: a url: source can carry an auth token in its query/path, so we
         // log only scheme+host (mirrors the helper's scheme_and_host). file:/testpattern log as-is.

@@ -12,7 +12,7 @@ use anyhow::Context;
 use stellar_castbox::server;
 use stellar_castbox::source::ffmpeg::{FfmpegInput, FfmpegSource};
 use stellar_castbox::source::resolve::{
-    is_direct_media_url, resolve_via_ytdlp, scheme_and_host, YTDLP_AUDIO_SELECTOR, YTDLP_VIDEO_SELECTOR,
+    is_direct_media_url, resolve_via_ytdlp, scheme_and_host, video_selector, YTDLP_AUDIO_SELECTOR,
 };
 use stellar_castbox::source::testpattern::TestPattern;
 use stellar_castbox::wire::Control;
@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
 
     match args.source.as_str() {
         "testpattern" => {
-            let source = TestPattern::new(DEFAULT_W, DEFAULT_H, DEFAULT_FPS);
+            let source = TestPattern::new(args.width, args.height, DEFAULT_FPS);
             server::serve(args.listen, source, control_tx).await
         }
         other if other.starts_with("file:") => {
@@ -45,7 +45,7 @@ async fn main() -> anyhow::Result<()> {
             // A file carries its own audio, so ffplay plays the same file.
             let audio_out = resolve_ffplay_path(args.ffplay.as_deref()).map(|pp| (pp, path.clone()));
             let source = FfmpegSource::spawn(
-                FfmpegInput::File(path), DEFAULT_W, DEFAULT_H, DEFAULT_FPS, ffmpeg_path, audio_out,
+                FfmpegInput::File(path), args.width, args.height, DEFAULT_FPS, ffmpeg_path, audio_out,
             )?;
             server::serve(args.listen, source, control_tx).await
         }
@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
                 // page URL: resolve a low-res H.264 VIDEO stream for ffmpeg and, separately, the best
                 // AUDIO stream for ffplay (many YouTube videos have no combined format).
                 let ytdlp_path = resolve_ytdlp_path(args.ytdlp.as_deref())?;
-                let video = resolve_via_ytdlp(&raw_url, &ytdlp_path, YTDLP_VIDEO_SELECTOR).await?;
+                let video = resolve_via_ytdlp(&raw_url, &ytdlp_path, &video_selector(args.height)).await?;
                 let audio = resolve_via_ytdlp(&raw_url, &ytdlp_path, YTDLP_AUDIO_SELECTOR).await.ok();
                 eprintln!(
                     "[resolve] yt-dlp {} -> video {} ({})",
@@ -75,8 +75,8 @@ async fn main() -> anyhow::Result<()> {
             };
             let source = FfmpegSource::spawn(
                 FfmpegInput::Url(video_url),
-                DEFAULT_W,
-                DEFAULT_H,
+                args.width,
+                args.height,
                 DEFAULT_FPS,
                 ffmpeg_path,
                 audio_out,
@@ -158,6 +158,8 @@ fn resolve_ffplay_path(override_path: Option<&str>) -> Option<PathBuf> {
 struct Args {
     listen: SocketAddr,
     source: String,
+    width: u16,
+    height: u16,
     ffmpeg: Option<String>,
     ytdlp: Option<String>,
     ffplay: Option<String>,
@@ -167,6 +169,8 @@ impl Args {
     fn parse(args: impl Iterator<Item = String>) -> Self {
         let mut listen: SocketAddr = DEFAULT_LISTEN.parse().expect("default listen addr is valid");
         let mut source = "testpattern".to_string();
+        let mut width = DEFAULT_W;
+        let mut height = DEFAULT_H;
         let mut ffmpeg = None;
         let mut ytdlp = None;
         let mut ffplay = None;
@@ -180,6 +184,14 @@ impl Args {
                 "--source" => {
                     source = it.next().expect("--source requires a name");
                 }
+                "--width" => {
+                    let v = it.next().expect("--width requires a number");
+                    width = v.parse().unwrap_or_else(|e| panic!("invalid --width '{v}': {e}"));
+                }
+                "--height" => {
+                    let v = it.next().expect("--height requires a number");
+                    height = v.parse().unwrap_or_else(|e| panic!("invalid --height '{v}': {e}"));
+                }
                 "--ffmpeg" => {
                     ffmpeg = Some(it.next().expect("--ffmpeg requires a path"));
                 }
@@ -192,6 +204,6 @@ impl Args {
                 other => eprintln!("warning: ignoring unknown argument '{other}'"),
             }
         }
-        Self { listen, source, ffmpeg, ytdlp, ffplay }
+        Self { listen, source, width, height, ffmpeg, ytdlp, ffplay }
     }
 }

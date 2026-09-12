@@ -11,16 +11,23 @@ namespace Stellar.WorldScreen.UI
     /// </summary>
     internal sealed class OverlayPanel
     {
-        private readonly Action<string> _load;    // the plugin's LoadSource(spec)
-        private readonly Action<string> _onCmd;   // the plugin's HandleControl(cmd)
+        private readonly Action<string> _load;      // the plugin's LoadSource(spec)
+        private readonly Action<string> _onCmd;     // the plugin's HandleControl(cmd)
+        private readonly string[] _qualityLabels;   // e.g. ["360p","480p","720p"]
+        private readonly Func<int> _currentQuality; // plugin's current quality index
+        private readonly Action<int> _onQuality;    // the plugin's SetQuality(index)
         private readonly IWindowControl _control;
         private string _input = string.Empty;
         private string _status = "Helper: starting…";
 
-        public OverlayPanel(IPluginServices services, Action<string> loadSource, Action<string> onControl)
+        public OverlayPanel(IPluginServices services, Action<string> loadSource, Action<string> onControl,
+            string[] qualityLabels, Func<int> currentQuality, Action<int> onQuality)
         {
             _load = loadSource;
             _onCmd = onControl;
+            _qualityLabels = qualityLabels;
+            _currentQuality = currentQuality;
+            _onQuality = onQuality;
             var spec = new WindowSpec(
                 "worldscreen.overlay", "World Screen",
                 new WindowRect(40f, 120f, 320f, 0f),
@@ -68,6 +75,12 @@ namespace Stellar.WorldScreen.UI
                 new ButtonElement(() => "Bigger", () => _onCmd("bigger")),
                 new ButtonElement(() => "Smaller", () => _onCmd("smaller")),
                 new ButtonElement(() => "In front of me", () => _onCmd("replace")),
+            }, 6f),
+            new SeparatorElement(),
+            new RowElement(new HudElement[]
+            {
+                new TextElement(() => "Quality:"),
+                new DropdownElement(_currentQuality, () => _qualityLabels, _onQuality, 90f),
             }, 6f),
         }, 6f)
         { Padding = 8 };
