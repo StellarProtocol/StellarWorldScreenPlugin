@@ -7,9 +7,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpListener;
+use tokio::process::ChildStdout;
 use tokio::sync::{mpsc, watch};
 
 use crate::source::Source;
@@ -36,7 +37,7 @@ type FrameSlot = Option<Arc<(u64, Vec<u8>)>>;
 /// would corrupt the byte-oriented framing for later messages.
 pub async fn serve(
     listen: SocketAddr,
-    source: impl Source + 'static,
+    mut source: impl Source + 'static,
     control_tx: mpsc::Sender<Control>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(listen).await.with_context(|| format!("bind {listen}"))?;
@@ -59,13 +60,38 @@ pub async fn serve(
     // returns/breaks — none of them propagate the resulting I/O error through `?`, so an ordinary
     // disconnect always ends `serve()` with `Ok(())` (see each function's own doc comment). Only
     // the bind/accept/HELLO/STREAM_INFO setup above this point still propagates as a genuine error.
+    // Audio (if the source has any) streams alongside video over the same socket.
+    let audio_stdout = source.take_audio();
     let (frame_tx, frame_rx) = watch::channel::<FrameSlot>(None);
+    let (audio_tx, audio_rx) = mpsc::channel::<Vec<u8>>(64);
     tokio::select! {
         _ = produce_frames(source, frame_tx) => {}
-        _ = write_frames(wr, frame_rx) => {}
+        _ = produce_audio(audio_stdout, audio_tx) => {}
+        _ = write_media(wr, frame_rx, audio_rx) => {}
         _ = forward_control(rd, control_tx) => {}
     }
     Ok(())
+}
+
+/// Reads S16LE PCM chunks from the source's audio stream and forwards them to `tx` for the writer to
+/// send as AUDIO messages. When the source has no audio, or the audio stream ends/fails, this does NOT
+/// end the session (video plays on) — it parks forever, holding `tx` open. The bounded `tx` gives
+/// backpressure so the (`-re`-paced) audio ffmpeg can't outrun a slow socket.
+async fn produce_audio(audio: Option<ChildStdout>, tx: mpsc::Sender<Vec<u8>>) {
+    if let Some(mut stdout) = audio {
+        let mut buf = vec![0u8; 8192];
+        loop {
+            match stdout.read(&mut buf).await {
+                Ok(0) | Err(_) => break, // audio ended/failed — stop audio, keep the session going
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).await.is_err() {
+                        break; // writer side gone (client disconnected)
+                    }
+                }
+            }
+        }
+    }
+    std::future::pending::<()>().await; // absence/EOF of audio must never end the session
 }
 
 /// Pulls frames from `source` forever, publishing each to `tx`. Never blocks on the socket —
@@ -80,24 +106,37 @@ async fn produce_frames(mut source: impl Source, tx: watch::Sender<FrameSlot>) {
     }
 }
 
-/// Writes each newest frame reported by `rx` to `wr`. If several frames land in `rx` while a write
-/// is still in flight, only the latest is seen on the next iteration — the rest are dropped.
-///
-/// Ends the session (returns) the same way `forward_control` ends its own loop on a read-side
-/// disconnect: the frame channel closing (producer gone) or a write error (client gone — an
-/// ordinary disconnect surfaces here as a broken-pipe/connection-reset error on `write_all`) both
-/// just mean the session is over, not that `serve()` failed, so neither is propagated via `?`.
-async fn write_frames(mut wr: OwnedWriteHalf, mut rx: watch::Receiver<FrameSlot>) {
+/// Writes video FRAMEs (latest-wins, from `frame_rx`) and audio AUDIO chunks (queued, from `audio_rx`)
+/// to the one client socket, whichever is ready. Video keeps its latest-wins behaviour (only the newest
+/// frame is written when several land during a slow write); audio is a bounded queue so samples aren't
+/// dropped. Ends the session (returns) on any write error or when the video producer is gone — never
+/// propagating the error, so an ordinary disconnect ends `serve()` with `Ok` (matching `forward_control`).
+async fn write_media(
+    mut wr: OwnedWriteHalf,
+    mut frame_rx: watch::Receiver<FrameSlot>,
+    mut audio_rx: mpsc::Receiver<Vec<u8>>,
+) {
     loop {
-        if rx.changed().await.is_err() {
-            break; // producer side gone — nothing left to feed.
-        }
-        let frame = rx.borrow_and_update().clone(); // Arc clone: O(1) refcount bump, not a copy.
-        if let Some(payload) = frame {
-            let framed = wire::encode_frame(payload.0, &payload.1);
-            if let Err(e) = wr.write_all(&framed).await {
-                eprintln!("[server] client disconnected (write FRAME: {e}) — ending session");
-                break;
+        tokio::select! {
+            changed = frame_rx.changed() => {
+                if changed.is_err() {
+                    break; // video producer gone — session over
+                }
+                let frame = frame_rx.borrow_and_update().clone(); // Arc clone: O(1) refcount bump.
+                if let Some(p) = frame {
+                    if let Err(e) = wr.write_all(&wire::encode_frame(p.0, &p.1)).await {
+                        eprintln!("[server] client disconnected (write FRAME: {e}) — ending session");
+                        break;
+                    }
+                }
+            }
+            chunk = audio_rx.recv() => {
+                // `produce_audio` holds its sender open forever, so `None` never actually arrives.
+                if let Some(pcm) = chunk {
+                    if wr.write_all(&wire::encode_audio(&pcm)).await.is_err() {
+                        break; // client gone
+                    }
+                }
             }
         }
     }

@@ -20,6 +20,7 @@ pub const TYPE_STREAM_INFO: u8 = 0x02;
 pub const TYPE_FRAME: u8 = 0x03;
 pub const TYPE_STATUS: u8 = 0x04;
 pub const TYPE_CONTROL: u8 = 0x05;
+pub const TYPE_AUDIO: u8 = 0x06;
 
 /// One framed message on the wire (see `docs/protocol.md`).
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +30,8 @@ pub enum Msg {
     Frame { pts_ms: u64, bytes: Vec<u8> },
     Status { state: u8, position_ms: u64, duration_ms: u64, err: String },
     Control(Control),
+    /// Interleaved S16LE PCM, 48000 Hz, 2 channels (fixed format — see docs/protocol.md).
+    Audio { pcm: Vec<u8> },
 }
 
 /// CONTROL (0x05) op payloads, `docs/protocol.md` § CONTROL ops.
@@ -71,7 +74,18 @@ pub fn encode(m: &Msg) -> Vec<u8> {
             body.push(TYPE_CONTROL);
             push_control(&mut body, c);
         }
+        Msg::Audio { pcm } => return encode_audio(pcm),
     }
+    envelope(body)
+}
+
+/// Encodes an AUDIO message from a PCM byte slice without an owned `Msg::Audio` (avoids cloning the
+/// PCM buffer to hand it to [`encode`]). Byte-identical to `encode(&Msg::Audio { pcm: pcm.to_vec() })`.
+/// Used by the server on the hot per-chunk audio path.
+pub fn encode_audio(pcm: &[u8]) -> Vec<u8> {
+    let mut body = Vec::with_capacity(1 + pcm.len());
+    body.push(TYPE_AUDIO);
+    body.extend_from_slice(pcm);
     envelope(body)
 }
 
@@ -162,6 +176,7 @@ fn parse_body(body: &[u8]) -> io::Result<Msg> {
             err: c.str16()?,
         }),
         TYPE_CONTROL => Ok(Msg::Control(parse_control(&mut c)?)),
+        TYPE_AUDIO => Ok(Msg::Audio { pcm: c.rest() }),
         other => Err(io::Error::new(io::ErrorKind::InvalidData, format!("unknown msg type 0x{other:02x}"))),
     }
 }

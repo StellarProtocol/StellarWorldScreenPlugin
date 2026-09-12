@@ -88,9 +88,11 @@ pub struct FfmpegSource {
     title: String,
     pts_ms: u64,
     buf: Vec<u8>,
-    /// Optional ffplay process playing the input's audio; kept alive for `kill_on_drop`. Never read.
+    /// Audio-decode ffmpeg process (input's audio → PCM); kept alive for `kill_on_drop`. Never read.
     #[allow(dead_code)]
-    audio: Option<Child>,
+    audio_child: Option<Child>,
+    /// The audio ffmpeg's stdout (S16LE 48kHz stereo PCM); taken once by the server via `take_audio`.
+    audio_stdout: Option<ChildStdout>,
 }
 
 impl FfmpegSource {
@@ -143,8 +145,14 @@ impl FfmpegSource {
             .with_context(|| format!("spawn ffmpeg at {}", ffmpeg_path.display()))?;
         let stdout = child.stdout.take().context("ffmpeg child produced no stdout pipe")?;
 
-        let audio = audio_out
-            .and_then(|(ffplay, inp)| spawn_audio(ffplay, &inp, matches!(input, FfmpegInput::File(_))));
+        let is_file = matches!(input, FfmpegInput::File(_));
+        let (audio_child, audio_stdout) = match audio_out {
+            Some((ffmpeg, inp)) => match spawn_audio_ffmpeg(ffmpeg, &inp, is_file) {
+                Some((c, so)) => (Some(c), Some(so)),
+                None => (None, None),
+            },
+            None => (None, None),
+        };
 
         Ok(Self {
             child,
@@ -155,34 +163,45 @@ impl FfmpegSource {
             title,
             pts_ms: 0,
             buf: vec![0u8; w as usize * h as usize * 4],
-            audio,
+            audio_child,
+            audio_stdout,
         })
     }
 }
 
-/// Spawns `ffplay` to play the input's audio on the host (its SDL audio routes through Wine to the host,
-/// like the game's own audio). Best-effort: on any failure the video still plays, just silent. `-nodisp`
-/// = no window; local files loop to match the video's `-stream_loop -1`. Two independent decodes, so
-/// A/V sync is tight for files and can drift a little on streamed URLs.
-fn spawn_audio(ffplay_path: PathBuf, input: &str, is_file: bool) -> Option<Child> {
-    let mut cmd = Command::new(&ffplay_path);
-    // ffplay is an SDL app; force a headless (dummy) VIDEO driver so it never needs a display/window,
-    // while its AUDIO still uses the real device — verified ffplay runs headless this way under Wine.
-    cmd.env("SDL_VIDEODRIVER", "dummy");
-    cmd.arg("-hide_banner").arg("-loglevel").arg("error").arg("-nodisp").arg("-autoexit");
+/// Spawns an ffmpeg that decodes the input's audio to raw interleaved S16LE PCM at 48000 Hz, 2 channels
+/// on stdout, for the server to stream to the plugin as AUDIO messages (played by a 3D AudioSource in
+/// Unity — so the sound is spatialised by the player's distance from the screen). `-re` paces it at
+/// realtime so it stays in step with the `-re`-paced video; local files loop (`-stream_loop -1`) to
+/// match the looping video. Best-effort: returns `None` on spawn failure (video plays silent).
+fn spawn_audio_ffmpeg(ffmpeg_path: PathBuf, input: &str, is_file: bool) -> Option<(Child, ChildStdout)> {
+    let mut cmd = Command::new(&ffmpeg_path);
+    cmd.arg("-hide_banner").arg("-loglevel").arg("error");
     if is_file {
-        cmd.arg("-loop").arg("0");
+        cmd.arg("-stream_loop").arg("-1");
     }
-    cmd.arg("-i")
+    cmd.arg("-re")
+        .arg("-i")
         .arg(input)
+        .arg("-vn")
+        .arg("-f")
+        .arg("s16le")
+        .arg("-ar")
+        .arg("48000")
+        .arg("-ac")
+        .arg("2")
+        .arg("pipe:1")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
     match cmd.spawn() {
-        Ok(c) => Some(c),
+        Ok(mut child) => {
+            let stdout = child.stdout.take()?;
+            Some((child, stdout))
+        }
         Err(e) => {
-            eprintln!("[ffmpeg source] audio (ffplay) failed to start: {e}");
+            eprintln!("[ffmpeg source] audio decode failed to start: {e}");
             None
         }
     }
@@ -191,6 +210,10 @@ fn spawn_audio(ffplay_path: PathBuf, input: &str, is_file: bool) -> Option<Child
 impl Source for FfmpegSource {
     fn info(&self) -> StreamInfo {
         StreamInfo { w: self.w, h: self.h, pixfmt: 0, fps: self.fps, title: self.title.clone() }
+    }
+
+    fn take_audio(&mut self) -> Option<ChildStdout> {
+        self.audio_stdout.take()
     }
 
     async fn next_frame(&mut self) -> Option<(u64, Vec<u8>)> {

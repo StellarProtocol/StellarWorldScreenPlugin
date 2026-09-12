@@ -18,6 +18,7 @@ The reader reads a 4-byte little-endian `len`, then exactly `len` bytes; the fir
 | 0x03 | FRAME | H→P | `u64 ptsMs`, then `w*h*bpp` raw pixel bytes |
 | 0x04 | STATUS | H→P | `u8 state (0 idle, 1 playing, 2 paused, 3 error)`, `u64 positionMs`, `u64 durationMs`, `u16 errLen`, `errLen` bytes UTF-8 |
 | 0x05 | CONTROL | P→H | `u8 op`, then op payload |
+| 0x06 | AUDIO | H→P | interleaved **S16LE PCM**, **48000 Hz**, **2 channels** — the payload is raw sample bytes (no header; the format is fixed). The plugin feeds these to a 3D AudioSource for spatial playback. |
 
 ### CONTROL ops
 

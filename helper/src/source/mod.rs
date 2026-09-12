@@ -32,4 +32,11 @@ pub trait Source: Send {
     /// write `async fn next_frame(...) { .. }` — that satisfies this signature as long as the
     /// concrete future is actually `Send`, true here since `Source: Send`.
     fn next_frame(&mut self) -> impl std::future::Future<Output = Option<(u64, Vec<u8>)>> + Send;
+
+    /// Takes the source's audio stream — raw interleaved S16LE PCM, 48000 Hz, 2 channels, on a child
+    /// process's stdout — so the server can stream it to the plugin as AUDIO messages. Returns `None`
+    /// when the source has no audio (the default; `TestPattern` is silent). Callable once.
+    fn take_audio(&mut self) -> Option<tokio::process::ChildStdout> {
+        None
+    }
 }

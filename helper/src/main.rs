@@ -42,8 +42,8 @@ async fn main() -> anyhow::Result<()> {
         other if other.starts_with("file:") => {
             let path = other["file:".len()..].to_string();
             let ffmpeg_path = resolve_ffmpeg_path(args.ffmpeg.as_deref())?;
-            // A file carries its own audio, so ffplay plays the same file.
-            let audio_out = resolve_ffplay_path(args.ffplay.as_deref()).map(|pp| (pp, path.clone()));
+            // A file carries its own audio, decoded by a second ffmpeg from the same file.
+            let audio_out = Some((ffmpeg_path.clone(), path.clone()));
             let source = FfmpegSource::spawn(
                 FfmpegInput::File(path), args.width, args.height, DEFAULT_FPS, ffmpeg_path, audio_out,
             )?;
@@ -69,10 +69,7 @@ async fn main() -> anyhow::Result<()> {
                 );
                 (video, audio)
             };
-            let audio_out = match (resolve_ffplay_path(args.ffplay.as_deref()), audio_input) {
-                (Some(ffplay), Some(inp)) => Some((ffplay, inp)),
-                _ => None,
-            };
+            let audio_out = audio_input.map(|inp| (ffmpeg_path.clone(), inp));
             let source = FfmpegSource::spawn(
                 FfmpegInput::Url(video_url),
                 args.width,
@@ -142,17 +139,6 @@ fn resolve_ytdlp_path(override_path: Option<&str>) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-/// Resolves the `ffplay.exe` used for audio playback: `--ffplay <path>` if given, else the sibling
-/// `ffplay.exe`. Audio is OPTIONAL — returns `None` (silent video) rather than erroring if it's absent,
-/// so a bundle without ffplay still plays video.
-fn resolve_ffplay_path(override_path: Option<&str>) -> Option<PathBuf> {
-    let path = match override_path {
-        Some(p) => PathBuf::from(p),
-        None => std::env::current_exe().ok()?.parent()?.join("ffplay.exe"),
-    };
-    path.exists().then_some(path)
-}
-
 /// Minimal hand-rolled CLI (`--listen ADDR`, `--source NAME`, `--ffmpeg/--ytdlp/--ffplay PATH`) —
 /// not worth an extra dependency for a handful of flags.
 struct Args {
@@ -162,7 +148,6 @@ struct Args {
     height: u16,
     ffmpeg: Option<String>,
     ytdlp: Option<String>,
-    ffplay: Option<String>,
 }
 
 impl Args {
@@ -173,7 +158,6 @@ impl Args {
         let mut height = DEFAULT_H;
         let mut ffmpeg = None;
         let mut ytdlp = None;
-        let mut ffplay = None;
         let mut it = args;
         while let Some(arg) = it.next() {
             match arg.as_str() {
@@ -198,12 +182,9 @@ impl Args {
                 "--ytdlp" => {
                     ytdlp = Some(it.next().expect("--ytdlp requires a path"));
                 }
-                "--ffplay" => {
-                    ffplay = Some(it.next().expect("--ffplay requires a path"));
-                }
                 other => eprintln!("warning: ignoring unknown argument '{other}'"),
             }
         }
-        Self { listen, source, width, height, ffmpeg, ytdlp, ffplay }
+        Self { listen, source, width, height, ffmpeg, ytdlp }
     }
 }
