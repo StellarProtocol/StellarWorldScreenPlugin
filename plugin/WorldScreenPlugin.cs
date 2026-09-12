@@ -75,12 +75,18 @@ namespace Stellar.WorldScreen
                 shouldRender: () => !_fullscreen.Visible);
             _actionMenu = new UI.ActionMenu(
                 services,
-                shouldRender: () => (_playerNear || _fullscreen.Visible) && _avpro.Exists,
+                // Proximity menu only — full-screen has its own on-canvas control bar above the video.
+                shouldRender: () => _playerNear && !_fullscreen.Visible && _avpro.Exists,
                 isFullscreen: () => _fullscreen.Visible,
                 toggleFullscreen: ToggleFullscreen,
                 isPlaying: () => _avpro.IsPlaying,
                 togglePause: () => _avpro.TogglePause(),
                 stop: () => LoadSource("testpattern"));
+            _fullscreen.Bind(
+                isPlaying: () => _avpro.IsPlaying,
+                togglePause: () => _avpro.TogglePause(),
+                stop: () => LoadSource("testpattern"),
+                exit: () => _fullscreen.Hide());
 
             // HelperClient events fire on its background thread — marshal to Unity's main thread.
             _client.OnConnected += () => _services.Framework.Post(() =>
@@ -295,8 +301,12 @@ namespace Stellar.WorldScreen
             if (_placed)
             {
                 var dist = ScreenDistance();
-                _playerNear = dist >= 0f && dist <= InteractRadius; // gates the control bar (ShouldRender)
-                if (_fullscreen.Visible) _fullscreen.SetTexture(tex, w, h);
+                _playerNear = dist >= 0f && dist <= InteractRadius; // gates the proximity menu (ShouldRender)
+                if (_fullscreen.Visible)
+                {
+                    _fullscreen.SetTexture(tex, w, h);
+                    if (Input.GetKeyDown(KeyCode.Escape)) _fullscreen.Hide(); // always-available exit fallback
+                }
                 PumpVolume(dt);
             }
         }
