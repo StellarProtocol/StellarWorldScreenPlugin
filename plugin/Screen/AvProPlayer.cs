@@ -66,6 +66,9 @@ namespace Stellar.WorldScreen.Screen
             if (_mp != null) _mp.AudioVolume = Mathf.Clamp01(v);
         }
 
+        /// <summary>Current playback volume in [0,1].</summary>
+        public float Volume => (_mp != null && _mp.Control != null) ? _mp.Control.GetVolume() : 1f;
+
         /// <summary>True while the media is actively playing (false when paused/stopped/not ready).</summary>
         public bool IsPlaying => _mp != null && _mp.Control != null && _mp.Control.IsPlaying();
 

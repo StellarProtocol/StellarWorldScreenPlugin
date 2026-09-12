@@ -288,7 +288,7 @@ namespace Stellar.WorldScreen
             if (w <= 0 || h <= 0) { w = tex.width; h = tex.height; }
             if (w <= 0 || h <= 0) return;
 
-            _screen.ShowExternalTexture(tex, w, h);
+            _screen.ShowVideoPlayer(_avpro.Player, w, h); // AVPro DisplayUGUI (correct colour), not a raw texture
             if (!_placed)
             {
                 if (IsInWorld()) PlaceScreen();

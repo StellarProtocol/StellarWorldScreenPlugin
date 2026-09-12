@@ -10,26 +10,33 @@ namespace Stellar.WorldScreen.Screen
 {
     /// <summary>
     /// A screen-space "cinema" overlay above ALL HUD/windows (sortingOrder 32756 &gt; framework windows 32755):
-    /// a full-screen black backdrop with the video aspect-fit, plus a proper video-player control bar (custom
-    /// uGUI on the same canvas so it draws above the video). The opaque backdrop hides every panel — the clean
-    /// fullscreen the game menu gives. The bar carries play/pause, restart, mute, a click-to-seek progress bar
-    /// with elapsed/total time, and exit; it auto-hides after a few idle seconds and returns on mouse movement.
-    /// Fed the AVPro texture via <see cref="SetTexture"/> and ticked via <see cref="Tick"/>. Main thread only.
+    /// a full-screen black backdrop with the video rendered via AVPro's <see cref="DisplayUGUI"/> (correct
+    /// material — YCbCr/colour space/orientation), plus a video-player control bar (custom uGUI on the same
+    /// canvas). The bar has play/pause, restart, mute, a draggable volume slider, a draggable seek bar with a
+    /// knob + elapsed/total time, and exit; it auto-hides after a few idle seconds and returns on mouse
+    /// movement (or while dragging). Ticked via <see cref="Tick"/>. Main thread only.
     /// </summary>
     internal sealed class FullscreenView
     {
         private const float IdleHideSeconds = 3f;
 
         private GameObject? _root;
-        private DisplayUGUI? _display; // AVPro's own uGUI renderer (correct YCbCr/colour-space/orientation)
+        private DisplayUGUI? _display; // AVPro's uGUI renderer (correct colour, unlike a plain RawImage)
 
         private CanvasGroup? _barGroup;
-        private Image? _seekFill;
-        private RectTransform? _seekTrackRt;
         private Text? _timeLabel;
         private Text? _playPauseLabel;
         private Text? _muteLabel;
         private Font? _font;
+
+        // Seek + volume sliders (track / fill / knob).
+        private RectTransform? _seekTrackRt;
+        private Image? _seekFill;
+        private RectTransform? _seekKnob;
+        private RectTransform? _volTrackRt;
+        private Image? _volFill;
+        private RectTransform? _volKnob;
+        private bool _seekDrag, _volDrag;
 
         private AvProPlayer? _player;
         private Action? _onStop;
@@ -43,20 +50,21 @@ namespace Stellar.WorldScreen.Screen
         /// <summary>Wires the bar to the player + a stop callback. Call once before first <see cref="Show"/>.</summary>
         public void Bind(AvProPlayer player, Action onStop) { _player = player; _onStop = onStop; }
 
-        public void Show() { EnsureCreated(); _root!.SetActive(true); _idle = 0f; _lastMouse = Input.mousePosition; SetBarShown(true); }
+        public void Show() { EnsureCreated(); _root!.SetActive(true); _idle = 0f; _lastMouse = Input.mousePosition; SetBarShown(true, instant: true); }
         public void Hide() { if (_root != null) _root.SetActive(false); }
         public void Toggle() { if (Visible) Hide(); else Show(); }
 
-        /// <summary>Per-frame: refresh labels/seek bar and run the auto-hide drawer (call each frame while shown).</summary>
+        /// <summary>Per-frame: refresh labels/sliders, handle drags, and run the auto-hide drawer.</summary>
         public void Tick(float dt)
         {
             if (_player == null) return;
+            HandleDrags();
             RefreshBar();
 
             var mouse = Input.mousePosition;
-            if ((mouse - _lastMouse).sqrMagnitude > 1f) { _lastMouse = mouse; _idle = 0f; }
-            else _idle += dt;
-            SetBarShown(_idle < IdleHideSeconds);
+            bool active = (mouse - _lastMouse).sqrMagnitude > 1f || _seekDrag || _volDrag;
+            if (active) { _lastMouse = mouse; _idle = 0f; } else _idle += dt;
+            SetBarShown(_idle < IdleHideSeconds, instant: false);
         }
 
         public void Destroy()
@@ -81,9 +89,6 @@ namespace Stellar.WorldScreen.Screen
             var bg = NewImage(_root.transform, "Backdrop", Color.black);
             StretchFull(bg.rectTransform);
 
-            // AVPro's own uGUI renderer: applies the correct material (YCbCr→RGB, colour space, flip) so the
-            // video looks right — a plain RawImage of the raw texture bands/mis-colours. Stretched full; its
-            // default scale mode letterboxes to keep aspect.
             var videoGo = new GameObject("Video");
             videoGo.transform.SetParent(_root.transform, false);
             _display = videoGo.AddComponent<DisplayUGUI>();
@@ -96,41 +101,32 @@ namespace Stellar.WorldScreen.Screen
 
         private void BuildControlBar()
         {
-            // Bar: bottom, stretched horizontally with side margins, 96 px tall, translucent.
-            var bar = NewImage(_root!.transform, "ControlBar", new Color(0.05f, 0.05f, 0.07f, 0.78f));
+            var bar = NewImage(_root!.transform, "ControlBar", new Color(0.05f, 0.05f, 0.07f, 0.80f));
             var barRt = bar.rectTransform;
             barRt.anchorMin = new Vector2(0f, 0f);
             barRt.anchorMax = new Vector2(1f, 0f);
             barRt.pivot = new Vector2(0.5f, 0f);
-            barRt.offsetMin = new Vector2(60f, 40f);    // left 60, bottom 40
-            barRt.offsetMax = new Vector2(-60f, 136f);  // right 60, top = 40 + 96
+            barRt.offsetMin = new Vector2(60f, 40f);
+            barRt.offsetMax = new Vector2(-60f, 140f); // 100 px tall
             _barGroup = bar.gameObject.AddComponent<CanvasGroup>();
 
-            // Seek track along the top of the bar (click to seek), with a fill.
-            var track = NewImage(bar.transform, "SeekTrack", new Color(1f, 1f, 1f, 0.20f));
-            _seekTrackRt = track.rectTransform;
-            _seekTrackRt.anchorMin = new Vector2(0f, 1f);
-            _seekTrackRt.anchorMax = new Vector2(1f, 1f);
-            _seekTrackRt.pivot = new Vector2(0.5f, 1f);
-            _seekTrackRt.offsetMin = new Vector2(18f, -30f);
-            _seekTrackRt.offsetMax = new Vector2(-18f, -22f); // 8 px tall, 22 px below bar top
-            var trackBtn = track.gameObject.AddComponent<Button>();
-            trackBtn.targetGraphic = track;
-            AddClick(trackBtn, OnSeekClick);
+            // Seek bar along the top of the bar.
+            (_seekTrackRt, _seekFill, _seekKnob) = BuildSlider(bar.transform, "Seek",
+                new Color(1f, 1f, 1f, 0.20f), new Color(0.72f, 0.36f, 1f, 0.95f),
+                anchorMin: new Vector2(0f, 1f), anchorMax: new Vector2(1f, 1f), pivot: new Vector2(0.5f, 1f),
+                offsetMin: new Vector2(18f, -32f), offsetMax: new Vector2(-18f, -24f));
 
-            _seekFill = NewImage(track.transform, "Fill", new Color(0.72f, 0.36f, 1f, 0.95f)); // accent purple
-            _seekFill.type = Image.Type.Filled;
-            _seekFill.fillMethod = Image.FillMethod.Horizontal;
-            _seekFill.fillOrigin = 0; // 0 = Left for horizontal fill
-            _seekFill.fillAmount = 0f;
-            StretchFull(_seekFill.rectTransform);
+            // Buttons row (bottom).
+            _playPauseLabel = AddButton(bar.transform, "Play", () => _player?.TogglePause(), true, 18f, 104f);
+            AddButton(bar.transform, "Restart", () => _player?.Seek(0d), true, 130f, 92f);
+            _muteLabel = AddButton(bar.transform, "Mute", () => _player?.ToggleMute(), true, 230f, 84f);
 
-            // Left cluster: play/pause, restart, mute.
-            _playPauseLabel = AddButton(bar.transform, "Play", () => _player?.TogglePause(), anchorLeft: true, x: 18f, w: 104f);
-            AddButton(bar.transform, "Restart", () => _player?.Seek(0d), anchorLeft: true, x: 130f, w: 92f);
-            _muteLabel = AddButton(bar.transform, "Mute", () => _player?.ToggleMute(), anchorLeft: true, x: 230f, w: 92f);
+            // Volume slider (compact, in the left cluster, vertically centred on the button row at y≈34).
+            (_volTrackRt, _volFill, _volKnob) = BuildSlider(bar.transform, "Vol",
+                new Color(1f, 1f, 1f, 0.20f), new Color(0.85f, 0.85f, 0.9f, 0.95f),
+                anchorMin: new Vector2(0f, 0f), anchorMax: new Vector2(0f, 0f), pivot: new Vector2(0f, 0.5f),
+                offsetMin: new Vector2(328f, 31f), offsetMax: new Vector2(448f, 37f));
 
-            // Centre: elapsed / total time.
             _timeLabel = NewText(bar.transform, "0:00 / 0:00");
             var tRt = _timeLabel.rectTransform;
             tRt.anchorMin = tRt.anchorMax = new Vector2(0.5f, 0f);
@@ -138,42 +134,101 @@ namespace Stellar.WorldScreen.Screen
             tRt.anchoredPosition = new Vector2(0f, 14f);
             tRt.sizeDelta = new Vector2(220f, 34f);
 
-            // Right cluster: exit.
-            AddButton(bar.transform, "Exit full screen", () => Hide(), anchorLeft: false, x: -18f, w: 156f);
+            AddButton(bar.transform, "Exit full screen", () => Hide(), false, -18f, 156f);
         }
 
-        // --- per-frame refresh ---
+        // Builds a track + fill + knob. offsetMin/Max place the TRACK relative to the given anchors.
+        private (RectTransform track, Image fill, RectTransform knob) BuildSlider(
+            Transform parent, string name, Color trackColor, Color fillColor,
+            Vector2 anchorMin, Vector2 anchorMax, Vector2 pivot, Vector2 offsetMin, Vector2 offsetMax)
+        {
+            var track = NewImage(parent, name + "Track", trackColor);
+            var trackRt = track.rectTransform;
+            trackRt.anchorMin = anchorMin; trackRt.anchorMax = anchorMax; trackRt.pivot = pivot;
+            trackRt.offsetMin = offsetMin; trackRt.offsetMax = offsetMax;
+
+            var fill = NewImage(track.transform, name + "Fill", fillColor);
+            fill.type = Image.Type.Filled;
+            fill.fillMethod = Image.FillMethod.Horizontal;
+            fill.fillOrigin = 0;
+            fill.fillAmount = 0f;
+            StretchFull(fill.rectTransform);
+
+            var knobImg = NewImage(track.transform, name + "Knob", Color.white);
+            var knob = knobImg.rectTransform;
+            knob.anchorMin = knob.anchorMax = new Vector2(0f, 0.5f);
+            knob.pivot = new Vector2(0.5f, 0.5f);
+            knob.sizeDelta = new Vector2(14f, 14f);
+            knob.anchoredPosition = Vector2.zero;
+            return (trackRt, fill, knob);
+        }
+
+        // --- per-frame ---
+
+        private void HandleDrags()
+        {
+            if (Input.GetMouseButtonDown(0))
+            {
+                if (Over(_seekTrackRt)) _seekDrag = true;
+                else if (Over(_volTrackRt)) _volDrag = true;
+            }
+            if (!Input.GetMouseButton(0)) { _seekDrag = false; _volDrag = false; }
+
+            if (_seekDrag && _player != null)
+            {
+                double dur = _player.Duration;
+                if (dur > 0.01 && Frac(_seekTrackRt, out var f)) _player.Seek(f * dur);
+            }
+            if (_volDrag && _player != null)
+            {
+                if (Frac(_volTrackRt, out var f)) _player.SetVolume(f);
+            }
+        }
 
         private void RefreshBar()
         {
             if (_player == null) return;
             if (_playPauseLabel != null) _playPauseLabel.text = _player.IsPlaying ? "Pause" : "Play";
             if (_muteLabel != null) _muteLabel.text = _player.IsMuted ? "Unmute" : "Mute";
+
             double dur = _player.Duration, cur = _player.CurrentTime;
-            if (_seekFill != null) _seekFill.fillAmount = dur > 0.01 ? Mathf.Clamp01((float)(cur / dur)) : 0f;
+            float sf = dur > 0.01 ? Mathf.Clamp01((float)(cur / dur)) : 0f;
+            SetSlider(_seekFill, _seekKnob, _seekTrackRt, sf);
             if (_timeLabel != null) _timeLabel.text = $"{Fmt(cur)} / {Fmt(dur)}";
+
+            float vf = _player.IsMuted ? 0f : Mathf.Clamp01(_player.Volume);
+            SetSlider(_volFill, _volKnob, _volTrackRt, vf);
         }
 
-        private void OnSeekClick()
+        private static void SetSlider(Image? fill, RectTransform? knob, RectTransform? track, float frac)
         {
-            if (_player == null || _seekTrackRt == null) return;
-            double dur = _player.Duration;
-            if (dur <= 0.01) return;
-            if (RectTransformUtility.ScreenPointToLocalPointInRectangle(_seekTrackRt, Input.mousePosition, null, out var local))
-            {
-                // pivot is centre-x; convert to 0..1 across the track width.
-                float w = _seekTrackRt.rect.width;
-                float frac = Mathf.Clamp01((local.x + w * _seekTrackRt.pivot.x) / w);
-                _player.Seek(frac * dur);
-            }
+            if (fill != null) fill.fillAmount = frac;
+            if (knob != null && track != null) knob.anchoredPosition = new Vector2(frac * track.rect.width, 0f);
         }
 
-        private void SetBarShown(bool shown)
+        private void SetBarShown(bool shown, bool instant)
         {
             if (_barGroup == null) return;
-            _barGroup.alpha = Mathf.MoveTowards(_barGroup.alpha, shown ? 1f : 0f, Time.unscaledDeltaTime * 6f);
+            float target = shown ? 1f : 0f;
+            _barGroup.alpha = instant ? target : Mathf.MoveTowards(_barGroup.alpha, target, Time.unscaledDeltaTime * 6f);
             _barGroup.blocksRaycasts = shown;
             _barGroup.interactable = shown;
+        }
+
+        private static bool Over(RectTransform? rt) =>
+            rt != null && RectTransformUtility.RectangleContainsScreenPoint(rt, Input.mousePosition, null);
+
+        // Fraction 0..1 of the mouse X across the track (accounts for pivot).
+        private static bool Frac(RectTransform? track, out float frac)
+        {
+            frac = 0f;
+            if (track == null) return false;
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(track, Input.mousePosition, null, out var local))
+                return false;
+            float w = track.rect.width;
+            if (w <= 0f) return false;
+            frac = Mathf.Clamp01((local.x + w * track.pivot.x) / w);
+            return true;
         }
 
         private static string Fmt(double seconds)
@@ -196,16 +251,11 @@ namespace Stellar.WorldScreen.Screen
             rt.sizeDelta = new Vector2(w, 40f);
             var btn = img.gameObject.AddComponent<Button>();
             btn.targetGraphic = img;
-            AddClick(btn, onClick);
+            var ua = DelegateSupport.ConvertDelegate<UnityAction>(onClick);
+            if (ua != null) { _clickRefs.Add(ua); btn.onClick.AddListener(ua); }
             var text = NewText(img.transform, label);
             StretchFull(text.rectTransform);
             return text;
-        }
-
-        private void AddClick(Button btn, Action onClick)
-        {
-            var ua = DelegateSupport.ConvertDelegate<UnityAction>(onClick);
-            if (ua != null) { _clickRefs.Add(ua); btn.onClick.AddListener(ua); }
         }
 
         private static Image NewImage(Transform parent, string name, Color color)

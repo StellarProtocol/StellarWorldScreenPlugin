@@ -1,6 +1,7 @@
 using System;
 using UnityEngine;
 using UnityEngine.UI;
+using RenderHeads.Media.AVProVideo;
 
 namespace Stellar.WorldScreen.Screen
 {
@@ -16,6 +17,7 @@ namespace Stellar.WorldScreen.Screen
         private GameObject? _root;
         private RawImage? _image;
         private Texture2D? _tex;
+        private DisplayUGUI? _display; // AVPro's uGUI renderer (correct colour, unlike a plain RawImage)
         private int _texW, _texH;
 
         // Audio is NOT played through Unity here: this game routes audio through Wwise with Unity's own audio
@@ -32,19 +34,24 @@ namespace Stellar.WorldScreen.Screen
         /// <summary>True once the screen GameObject exists.</summary>
         public bool Exists => _root != null;
 
-        /// <summary>Creates the world-space canvas + image (once) and (re)allocates the texture for w×h.</summary>
+        // Creates the world-space canvas root (once).
+        private void EnsureRoot()
+        {
+            if (_root != null) return;
+            _root = new GameObject("StellarWorldScreen");
+            UnityEngine.Object.DontDestroyOnLoad(_root);
+            var canvas = _root.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.WorldSpace;
+        }
+
+        /// <summary>Creates the world-space canvas + RawImage (once, wire path) and (re)allocates the texture.</summary>
         public void EnsureCreated(int w, int h)
         {
-            if (_root == null)
+            EnsureRoot();
+            if (_image == null)
             {
-                _root = new GameObject("StellarWorldScreen");
-                UnityEngine.Object.DontDestroyOnLoad(_root);
-
-                var canvas = _root.AddComponent<Canvas>();
-                canvas.renderMode = RenderMode.WorldSpace;
-
                 var imageGo = new GameObject("Screen");
-                imageGo.transform.SetParent(_root.transform, false);
+                imageGo.transform.SetParent(_root!.transform, false);
                 _image = imageGo.AddComponent<RawImage>();
                 StretchToParent(_image.rectTransform);
                 // ffmpeg delivers frame rows top-to-bottom; a Unity Texture2D's origin is bottom-left, so
@@ -55,15 +62,22 @@ namespace Stellar.WorldScreen.Screen
         }
 
         /// <summary>
-        /// Displays an externally-owned <see cref="Texture"/> (e.g. AVPro's decoded frame) on the screen,
-        /// bypassing the raw-upload path. Creates the canvas/image once and sizes it to w×h. Main thread only.
+        /// Renders <paramref name="player"/>'s video on the screen via AVPro's <see cref="DisplayUGUI"/> (the
+        /// correct material — YCbCr/colour space/orientation), sizing the canvas to w×h. Binds once; safe to
+        /// call each frame. Main thread only.
         /// </summary>
-        public void ShowExternalTexture(Texture tex, int w, int h)
+        public void ShowVideoPlayer(MediaPlayer? player, int w, int h)
         {
-            if (tex == null || w <= 0 || h <= 0) return;
-            EnsureCreated(w, h);
-            if (_image == null) return;
-            if (!ReferenceEquals(_image.texture, tex)) _image.texture = tex;
+            if (player == null || w <= 0 || h <= 0) return;
+            EnsureRoot();
+            if (_display == null)
+            {
+                var go = new GameObject("ScreenVideo");
+                go.transform.SetParent(_root!.transform, false);
+                _display = go.AddComponent<DisplayUGUI>();
+                StretchToParent(_display.rectTransform);
+            }
+            if (_display.CurrentMediaPlayer != player) _display.CurrentMediaPlayer = player;
             if (_texW != w || _texH != h) { _texW = w; _texH = h; SizeCanvas(w, h); }
         }
 
@@ -128,7 +142,7 @@ namespace Stellar.WorldScreen.Screen
         public void Destroy()
         {
             if (_tex != null) { UnityEngine.Object.Destroy(_tex); _tex = null; }
-            if (_root != null) { UnityEngine.Object.Destroy(_root); _root = null; _image = null; }
+            if (_root != null) { UnityEngine.Object.Destroy(_root); _root = null; _image = null; _display = null; }
             _texW = _texH = 0;
         }
 
