@@ -11,14 +11,16 @@ namespace Stellar.WorldScreen.UI
     /// </summary>
     internal sealed class OverlayPanel
     {
-        private readonly Action<string> _load; // the plugin's LoadSource(spec)
+        private readonly Action<string> _load;    // the plugin's LoadSource(spec)
+        private readonly Action<string> _onCmd;   // the plugin's HandleControl(cmd)
         private readonly IWindowControl _control;
         private string _input = string.Empty;
         private string _status = "Helper: starting…";
 
-        public OverlayPanel(IPluginServices services, Action<string> loadSource)
+        public OverlayPanel(IPluginServices services, Action<string> loadSource, Action<string> onControl)
         {
             _load = loadSource;
+            _onCmd = onControl;
             var spec = new WindowSpec(
                 "worldscreen.overlay", "World Screen",
                 new WindowRect(40f, 120f, 320f, 0f),
@@ -51,6 +53,21 @@ namespace Stellar.WorldScreen.UI
             new RowElement(new HudElement[]
             {
                 new ButtonElement(() => "Stop / Pattern", () => _load("testpattern")),
+            }, 6f),
+            new SeparatorElement(),
+            new TextElement(() => "Move / size the screen:"),
+            new RowElement(new HudElement[]
+            {
+                new ButtonElement(() => "Up", () => _onCmd("up")),
+                new ButtonElement(() => "Down", () => _onCmd("down")),
+                new ButtonElement(() => "Nearer", () => _onCmd("nearer")),
+                new ButtonElement(() => "Farther", () => _onCmd("farther")),
+            }, 6f),
+            new RowElement(new HudElement[]
+            {
+                new ButtonElement(() => "Bigger", () => _onCmd("bigger")),
+                new ButtonElement(() => "Smaller", () => _onCmd("smaller")),
+                new ButtonElement(() => "In front of me", () => _onCmd("replace")),
             }, 6f),
         }, 6f)
         { Padding = 8 };

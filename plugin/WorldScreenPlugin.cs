@@ -39,7 +39,7 @@ namespace Stellar.WorldScreen
             _log = services.Log;
             _launcher = new HelperLauncher(_log.Info);
             _client = new HelperClient(_sink);
-            _overlay = new UI.OverlayPanel(services, LoadSource);
+            _overlay = new UI.OverlayPanel(services, LoadSource, HandleControl);
 
             // HelperClient events fire on its background thread — marshal to Unity's main thread.
             _client.OnConnected += () => _services.Framework.Post(() =>
@@ -74,6 +74,21 @@ namespace Stellar.WorldScreen
             _log.Info($"[WorldScreen] loading source: {RedactSource(sourceSpec)}");
             _overlay.SetStatus("Loading…");
             _launcher.Restart(_exePath, BuildArgs(sourceSpec));
+        }
+
+        /// <summary>Handles an overlay placement command (fires on the Unity main thread from a button).</summary>
+        public void HandleControl(string cmd)
+        {
+            switch (cmd)
+            {
+                case "up": _screen.MoveVertical(0.5f); break;
+                case "down": _screen.MoveVertical(-0.5f); break;
+                case "nearer": _screen.MoveDepth(-1f); break;
+                case "farther": _screen.MoveDepth(1f); break;
+                case "bigger": _screen.ScaleBy(1.25f); break;
+                case "smaller": _screen.ScaleBy(0.8f); break;
+                case "replace": PlaceScreen(); break;
+            }
         }
 
         // Builds the helper command line for a source spec (source value quoted to tolerate spaces).

@@ -42,6 +42,9 @@ namespace Stellar.WorldScreen.Screen
                 imageGo.transform.SetParent(_root.transform, false);
                 _image = imageGo.AddComponent<RawImage>();
                 StretchToParent(_image.rectTransform);
+                // ffmpeg delivers frame rows top-to-bottom; a Unity Texture2D's origin is bottom-left, so
+                // raw upload displays upside-down. Flip vertically via the UV rect (free — no per-frame cost).
+                _image.uvRect = new Rect(0f, 1f, 1f, -1f);
             }
             EnsureTexture(w, h);
         }
@@ -71,9 +74,30 @@ namespace Stellar.WorldScreen.Screen
             if (fwd.sqrMagnitude < 1e-4f) fwd = Vector3.forward;
             fwd.Normalize();
 
-            _root.transform.position = origin + fwd * distance;
+            // Raise the centre so a ~1.7 m-tall screen clears the ground and sits nearer eye level (the
+            // camera origin can be low in third-person). The user fine-tunes with the overlay controls.
+            _root.transform.position = origin + fwd * distance + Vector3.up * 1.6f;
             // A uGUI canvas renders on its +Z face; orient +Z along fwd so the visible side faces the origin.
             _root.transform.rotation = Quaternion.LookRotation(fwd, Vector3.up);
+        }
+
+        /// <summary>Moves the screen up (+) or down (-) in world space.</summary>
+        public void MoveVertical(float dy)
+        {
+            if (_root != null) _root.transform.position += new Vector3(0f, dy, 0f);
+        }
+
+        /// <summary>Moves the screen farther (+) or nearer (-) along its own facing axis.</summary>
+        public void MoveDepth(float dz)
+        {
+            if (_root != null) _root.transform.position += _root.transform.forward * dz;
+        }
+
+        /// <summary>Scales the screen by <paramref name="factor"/> (clamped to a sane world-width range).</summary>
+        public void ScaleBy(float factor)
+        {
+            _widthMetres = Mathf.Clamp(_widthMetres * factor, 0.75f, 40f);
+            if (_texW > 0 && _texH > 0) SizeCanvas(_texW, _texH);
         }
 
         /// <summary>Shows or hides the screen without destroying it.</summary>
