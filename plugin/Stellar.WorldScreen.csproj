@@ -18,6 +18,12 @@
          WorldScreen uses only long-stable interfaces present in 2.7.0. -->
     <PackageReference Include="Stellar.Abstractions" Version="2.7.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
+    <!-- The game's own AVPro video engine (HW decode + A/V sync). NOT in InteropRefs; deploy.sh vendors
+         the game's interop stub into plugin/refs/. Private=false: the game provides it at runtime. -->
+    <Reference Include="AVProVideo.Runtime">
+      <HintPath>refs/AVProVideo.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="tests/**/*.cs" />

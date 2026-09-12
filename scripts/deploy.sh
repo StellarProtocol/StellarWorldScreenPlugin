@@ -10,6 +10,10 @@ DOTNET=/home/dorasu/.dotnet/dotnet
 GM="$(ls -d /opt/game/BlueProtocol2/drive_c/Star/StarLauncher/game/release_*/game_mini 2>/dev/null | sort -V | tail -1)"
 [ -n "$GM" ] || { echo "no game_mini found" >&2; exit 1; }
 
+echo "=== vendor AVPro interop stub (game's video engine; not in InteropRefs) ==="
+mkdir -p "$ROOT/plugin/refs"
+cp -f "$GM/BepInEx/interop/AVProVideo.Runtime.dll" "$ROOT/plugin/refs/AVProVideo.Runtime.dll"
+
 echo "=== build plugin (Release) ==="
 "$DOTNET" build "$ROOT/plugin/Stellar.WorldScreen.csproj" -c Release --nologo
 DLL="$ROOT/plugin/bin/Release/Stellar.WorldScreen.dll"
@@ -30,6 +34,8 @@ cp -f "$ROOT/vendor/ffmpeg.exe" "$SLOT/ffmpeg.exe"                       # decod
 cp -f "$ROOT/vendor/ffplay.exe" "$SLOT/ffplay.exe"                       # plays the decoded audio (as sibling)
 [ -f "$ROOT/vendor/yt-dlp.exe" ] && cp -f "$ROOT/vendor/yt-dlp.exe" "$SLOT/yt-dlp.exe" || true
 [ -f "$ROOT/vendor/test-clip.mp4" ] && cp -f "$ROOT/vendor/test-clip.mp4" "$SLOT/test-clip.mp4" || true
+# AVPro spike test clip (720p + 440Hz tone), generated into vendor/ by hand; keep whatever is in the slot.
+[ -f "$ROOT/vendor/avpro-test.mp4" ] && cp -f "$ROOT/vendor/avpro-test.mp4" "$SLOT/avpro-test.mp4" || true
 
 echo "=== deployed to $SLOT ==="
 ls -la "$SLOT"

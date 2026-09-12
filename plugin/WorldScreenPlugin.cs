@@ -19,10 +19,16 @@ namespace Stellar.WorldScreen
         private const int HelperPort = 47800;
         private const string ListenArg = "--listen 127.0.0.1:47800";
 
-        // Distance-based audio: the helper (ffplay) plays the sound; the plugin sends it a 0–100 volume from
-        // the player's in-world distance to the screen. Full within MinAudioDist, silent past MaxAudioDist.
+        // Distance-based audio: full within MinAudioDist, silent past MaxAudioDist.
         private const float MinAudioDist = 3f;
         private const float MaxAudioDist = 40f;
+
+        // SPIKE: drive playback through the game's AVPro engine (HW decode + internal A/V sync) instead of
+        // the raw-frame wire pipeline. When true, the helper is not launched; a bundled test clip is played
+        // via AVPro to verify smooth video + working System-path audio in-game before the full switch.
+        private const bool UseAvPro = true;
+        private readonly Screen.AvProPlayer _avpro = new();
+        private bool _avproOpened;
 
         private readonly IPluginServices _services;
         private readonly IPluginLog _log;
@@ -73,6 +79,13 @@ namespace Stellar.WorldScreen
 
             _update = OnUpdate;
             _services.Framework.Update += _update;
+
+            if (UseAvPro)
+            {
+                _log.Info("[WorldScreen] AVPro spike mode — helper NOT launched; playing bundled test clip");
+                _overlay.SetStatus("AVPro: starting…");
+                return;
+            }
 
             var initialSource = ResolveInitialSource();
             _currentSource = initialSource;
@@ -172,6 +185,8 @@ namespace Stellar.WorldScreen
         // Main-thread per-frame tick.
         private void OnUpdate(float dt)
         {
+            if (UseAvPro) { UpdateAvPro(dt); return; }
+
             if (_sink.TryTakeLatest(out var w, out var h, out var buffer))
                 _screen.Upload(buffer, w, h);
 
@@ -180,6 +195,38 @@ namespace Stellar.WorldScreen
 
             if (_placed)
                 PumpVolume(dt);
+        }
+
+        // AVPro spike: create the player once, open the bundled clip, then each frame show its decoded
+        // texture on the world screen and drive distance volume. AVPro handles decode + A/V sync internally.
+        private void UpdateAvPro(float dt)
+        {
+            if (!_avproOpened)
+            {
+                _avpro.EnsureCreated();
+                var dir = System.IO.Path.GetDirectoryName(_exePath) ?? ".";
+                var path = System.IO.Path.Combine(dir, "avpro-test.mp4");
+                var ok = _avpro.Open(path);
+                _avproOpened = true;
+                _log.Info($"[WorldScreen] AVPro Open('{path}') -> {ok}");
+                _overlay.SetStatus(ok ? "AVPro: opening…" : "AVPro: open FAILED");
+                return;
+            }
+
+            var tex = _avpro.CurrentTexture();
+            if (tex == null) return; // first frame not ready yet
+
+            int w = _avpro.VideoWidth, h = _avpro.VideoHeight;
+            if (w <= 0 || h <= 0) { w = tex.width; h = tex.height; }
+            if (w <= 0 || h <= 0) return;
+
+            _screen.ShowExternalTexture(tex, w, h);
+            if (!_placed)
+            {
+                if (IsInWorld()) PlaceScreen();
+                else _screen.SetVisible(false);
+            }
+            if (_placed) PumpVolume(dt);
         }
 
         // Distance-based volume: a few times a second, measure the player's (camera's) distance to the screen,
@@ -211,7 +258,8 @@ namespace Stellar.WorldScreen
             int vol = Mathf.RoundToInt(t * 100f);
             if (vol == _lastVolume) return;
             _lastVolume = vol;
-            _client.Send(Net.ControlOp.Volume, volume: (byte)vol);
+            if (UseAvPro) _avpro.SetVolume(vol / 100f);        // AVPro plays the audio (System output)
+            else _client.Send(Net.ControlOp.Volume, volume: (byte)vol); // helper (ffplay) applies the gain
         }
 
         private void PlaceScreen()
@@ -256,6 +304,7 @@ namespace Stellar.WorldScreen
         {
             if (_update != null) { _services.Framework.Update -= _update; _update = null; }
             try { _overlay.Remove(); } catch (Exception) { }
+            try { _avpro.Destroy(); } catch (Exception) { }
             try { _client.Dispose(); } catch (Exception) { }
             try { _launcher.Stop(); } catch (Exception) { }
             try { _screen.Destroy(); } catch (Exception) { }

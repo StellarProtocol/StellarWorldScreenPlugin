@@ -54,6 +54,19 @@ namespace Stellar.WorldScreen.Screen
             EnsureTexture(w, h);
         }
 
+        /// <summary>
+        /// Displays an externally-owned <see cref="Texture"/> (e.g. AVPro's decoded frame) on the screen,
+        /// bypassing the raw-upload path. Creates the canvas/image once and sizes it to w×h. Main thread only.
+        /// </summary>
+        public void ShowExternalTexture(Texture tex, int w, int h)
+        {
+            if (tex == null || w <= 0 || h <= 0) return;
+            EnsureCreated(w, h);
+            if (_image == null) return;
+            if (!ReferenceEquals(_image.texture, tex)) _image.texture = tex;
+            if (_texW != w || _texH != h) { _texW = w; _texH = h; SizeCanvas(w, h); }
+        }
+
         /// <summary>Uploads a raw RGBA32 frame (length ≥ w*h*4) into the screen texture. Main thread only.</summary>
         public void Upload(byte[] rgba, int w, int h)
         {
