@@ -37,6 +37,7 @@ namespace Stellar.WorldScreen.Screen
         private Image? _volFill;
         private RectTransform? _volKnob;
         private bool _seekDrag, _volDrag;
+        private float _seekPreview; // fraction shown while dragging the seek knob; committed on release
 
         private AvProPlayer? _player;
         private Action? _onStop;
@@ -114,7 +115,7 @@ namespace Stellar.WorldScreen.Screen
             (_seekTrackRt, _seekFill, _seekKnob) = BuildSlider(bar.transform, "Seek",
                 new Color(1f, 1f, 1f, 0.20f), new Color(0.72f, 0.36f, 1f, 0.95f),
                 anchorMin: new Vector2(0f, 1f), anchorMax: new Vector2(1f, 1f), pivot: new Vector2(0.5f, 1f),
-                offsetMin: new Vector2(18f, -32f), offsetMax: new Vector2(-18f, -24f));
+                offsetMin: new Vector2(18f, -34f), offsetMax: new Vector2(-18f, -22f)); // 12 px tall
 
             // Buttons row (bottom).
             _playPauseLabel = AddButton(bar.transform, "Play", () => _player?.TogglePause(), true, 18f, 104f);
@@ -167,21 +168,24 @@ namespace Stellar.WorldScreen.Screen
 
         private void HandleDrags()
         {
+            if (_player == null) return;
+
+            // Start a drag: a generous vertical hit area around the (thin) track so the grab is forgiving.
             if (Input.GetMouseButtonDown(0))
             {
-                if (Over(_seekTrackRt)) _seekDrag = true;
-                else if (Over(_volTrackRt)) _volDrag = true;
+                if (OverPadded(_seekTrackRt, 16f)) { _seekDrag = true; Frac(_seekTrackRt, out _seekPreview); }
+                else if (OverPadded(_volTrackRt, 16f)) _volDrag = true;
             }
-            if (!Input.GetMouseButton(0)) { _seekDrag = false; _volDrag = false; }
 
-            if (_seekDrag && _player != null)
+            // Once started, the drag follows the mouse X even past the track edges (Frac clamps 0..1).
+            if (_seekDrag && Frac(_seekTrackRt, out var sf)) _seekPreview = sf;      // preview only — no seek yet
+            if (_volDrag && Frac(_volTrackRt, out var vf)) _player.SetVolume(vf);     // volume is cheap → live
+
+            // Commit the seek on RELEASE (avoids scrubbing spam/stutter while dragging).
+            if (Input.GetMouseButtonUp(0))
             {
-                double dur = _player.Duration;
-                if (dur > 0.01 && Frac(_seekTrackRt, out var f)) _player.Seek(f * dur);
-            }
-            if (_volDrag && _player != null)
-            {
-                if (Frac(_volTrackRt, out var f)) _player.SetVolume(f);
+                if (_seekDrag) { double dur = _player.Duration; if (dur > 0.01) _player.Seek(_seekPreview * dur); }
+                _seekDrag = false; _volDrag = false;
             }
         }
 
@@ -192,12 +196,13 @@ namespace Stellar.WorldScreen.Screen
             if (_muteLabel != null) _muteLabel.text = _player.IsMuted ? "Unmute" : "Mute";
 
             double dur = _player.Duration, cur = _player.CurrentTime;
-            float sf = dur > 0.01 ? Mathf.Clamp01((float)(cur / dur)) : 0f;
+            float sf = _seekDrag ? _seekPreview : (dur > 0.01 ? Mathf.Clamp01((float)(cur / dur)) : 0f);
             SetSlider(_seekFill, _seekKnob, _seekTrackRt, sf);
-            if (_timeLabel != null) _timeLabel.text = $"{Fmt(cur)} / {Fmt(dur)}";
+            double showTime = _seekDrag ? _seekPreview * dur : cur; // preview the target time while dragging
+            if (_timeLabel != null) _timeLabel.text = $"{Fmt(showTime)} / {Fmt(dur)}";
 
-            float vf = _player.IsMuted ? 0f : Mathf.Clamp01(_player.Volume);
-            SetSlider(_volFill, _volKnob, _volTrackRt, vf);
+            float volFrac = _player.IsMuted ? 0f : Mathf.Clamp01(_player.Volume);
+            SetSlider(_volFill, _volKnob, _volTrackRt, volFrac);
         }
 
         private static void SetSlider(Image? fill, RectTransform? knob, RectTransform? track, float frac)
@@ -215,8 +220,16 @@ namespace Stellar.WorldScreen.Screen
             _barGroup.interactable = shown;
         }
 
-        private static bool Over(RectTransform? rt) =>
-            rt != null && RectTransformUtility.RectangleContainsScreenPoint(rt, Input.mousePosition, null);
+        // Mouse within the track's rect, expanded by padY vertically (and a little horizontally) so the thin
+        // track/knob is easy to grab.
+        private static bool OverPadded(RectTransform? rt, float padY)
+        {
+            if (rt == null) return false;
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rt, Input.mousePosition, null, out var local))
+                return false;
+            var r = rt.rect;
+            return local.x >= r.xMin - 6f && local.x <= r.xMax + 6f && local.y >= r.yMin - padY && local.y <= r.yMax + padY;
+        }
 
         // Fraction 0..1 of the mouse X across the track (accounts for pivot).
         private static bool Frac(RectTransform? track, out float frac)
