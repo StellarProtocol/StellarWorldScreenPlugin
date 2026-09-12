@@ -34,6 +34,7 @@ namespace Stellar.WorldScreen
         private UI.ActionMenu? _actionMenu;
         private bool _avproInitDone;
         private bool _playerNear;
+        private float _proxDiagTimer;
 
         private readonly IPluginServices _services;
         private readonly IPluginLog _log;
@@ -295,6 +296,12 @@ namespace Stellar.WorldScreen
             {
                 var dist = ScreenDistance();
                 _playerNear = dist >= 0f && dist <= InteractRadius; // gates the action menu (ShouldRender)
+                _proxDiagTimer += dt;
+                if (_proxDiagTimer >= 2f)
+                {
+                    _proxDiagTimer = 0f;
+                    _log.Info($"[WorldScreen] dist={dist:F1}m near={_playerNear} exists={_avpro.Exists} fs={_fullscreen.Visible}");
+                }
                 if (_fullscreen.Visible) _fullscreen.SetTexture(tex, w, h);
                 PumpVolume(dt);
             }
@@ -316,16 +323,17 @@ namespace Stellar.WorldScreen
             }
         }
 
-        // Distance from the listener (camera, else player eye) to the screen, or -1 if the screen isn't up.
+        // Horizontal distance from the PLAYER (not the camera — it can be far in a zoomed-out third-person
+        // view) to the screen, or -1 if the screen isn't up. This is the "how near is the user" metric used
+        // for both the proximity action menu and the volume falloff.
         private float ScreenDistance()
         {
             var root = _screen.Root;
             if (root == null) return -1f;
-            var cam = GetActiveCamera();
-            Vector3 listener;
-            if (cam != null) listener = cam.transform.position;
-            else { var p = _services.PlayerState.Position; listener = new Vector3(p.X, p.Y + 1.6f, p.Z); }
-            return Vector3.Distance(listener, root.position);
+            var p = _services.PlayerState.Position;
+            var d = root.position - new Vector3(p.X, p.Y, p.Z);
+            d.y = 0f; // the screen sits above ground; compare on the ground plane
+            return d.magnitude;
         }
 
         // Distance-based volume: a few times a second map the screen distance to 0–100 (full within
