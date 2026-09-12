@@ -27,8 +27,10 @@ namespace Stellar.WorldScreen.UI
                 new WindowRect(700f, 200f, 220f, 0f),
                 WindowCategory.Tools, WindowPanelStyle.Tracker)
             {
-                ShouldRender = shouldRender,   // framework hides the window when the player walks away
-                StartVisible = false,
+                // Open from the start; ShouldRender does the proximity gating each frame (a window left
+                // StartVisible=false stays CLOSED and ShouldRender never reopens it — that hid the menu).
+                ShouldRender = shouldRender,
+                StartVisible = true,
                 Draggable = true,
                 Closable = false,
             };
