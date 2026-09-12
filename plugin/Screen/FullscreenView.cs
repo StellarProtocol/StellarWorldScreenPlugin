@@ -37,6 +37,7 @@ namespace Stellar.WorldScreen.Screen
         private Image? _volFill;
         private RectTransform? _volKnob;
         private bool _seekDrag, _volDrag;
+        private bool _wasHeld;      // previous frame's mouse-held state, for our own press edge
         private float _seekPreview; // fraction shown while dragging the seek knob; committed on release
 
         private AvProPlayer? _player;
@@ -170,20 +171,27 @@ namespace Stellar.WorldScreen.Screen
         {
             if (_player == null) return;
 
-            // Start a drag: a generous vertical hit area around the (thin) track so the grab is forgiving.
-            if (Input.GetMouseButtonDown(0))
+            // Drive everything off the HELD state (level), not the Up/Down edges — GetMouseButtonUp is
+            // unreliable under this game's input, which left a click "stuck" following the mouse. A drag is
+            // therefore active ONLY while the button is genuinely held; it can never persist past release.
+            bool held = Input.GetMouseButton(0);
+            bool press = held && !_wasHeld;
+            _wasHeld = held;
+
+            if (press)
             {
                 if (OverPadded(_seekTrackRt, 16f)) { _seekDrag = true; Frac(_seekTrackRt, out _seekPreview); }
                 else if (OverPadded(_volTrackRt, 16f)) _volDrag = true;
             }
 
-            // Once started, the drag follows the mouse X even past the track edges (Frac clamps 0..1).
-            if (_seekDrag && Frac(_seekTrackRt, out var sf)) _seekPreview = sf;      // preview only — no seek yet
-            if (_volDrag && Frac(_volTrackRt, out var vf)) _player.SetVolume(vf);     // volume is cheap → live
-
-            // Commit the seek on RELEASE (avoids scrubbing spam/stutter while dragging).
-            if (Input.GetMouseButtonUp(0))
+            if (held)
             {
+                if (_seekDrag && Frac(_seekTrackRt, out var sf)) _seekPreview = sf;   // preview only — no seek yet
+                if (_volDrag && Frac(_volTrackRt, out var vf)) _player.SetVolume(vf); // volume is cheap → live
+            }
+            else if (_seekDrag || _volDrag)
+            {
+                // Released: commit a pending seek, then clear so nothing keeps following the mouse.
                 if (_seekDrag) { double dur = _player.Duration; if (dur > 0.01) _player.Seek(_seekPreview * dur); }
                 _seekDrag = false; _volDrag = false;
             }
