@@ -27,9 +27,13 @@ namespace Stellar.WorldScreen
         // raw-frame wire pipeline. The helper is not launched; yt-dlp resolves page URLs to a direct URL
         // AVPro can open. Kept as a flag so the old wire path can be restored by flipping it to false.
         private const bool UseAvPro = true;
+        private const float InteractRadius = 12f; // show the action menu when the player is within this many metres
         private readonly Screen.AvProPlayer _avpro = new();
+        private readonly Screen.FullscreenView _fullscreen = new();
         private readonly Net.YtDlpResolver _resolver;
+        private UI.ActionMenu? _actionMenu;
         private bool _avproInitDone;
+        private bool _playerNear;
 
         private readonly IPluginServices _services;
         private readonly IPluginLog _log;
@@ -68,6 +72,14 @@ namespace Stellar.WorldScreen
             var slotDir = System.IO.Path.GetDirectoryName(_exePath) ?? ".";
             _resolver = new Net.YtDlpResolver(System.IO.Path.Combine(slotDir, "yt-dlp.exe"), slotDir);
             _overlay = new UI.OverlayPanel(services, LoadSource, HandleControl, QualityLabels(), () => _quality, SetQuality);
+            _actionMenu = new UI.ActionMenu(
+                services,
+                shouldRender: () => (_playerNear || _fullscreen.Visible) && _avpro.Exists,
+                isFullscreen: () => _fullscreen.Visible,
+                toggleFullscreen: ToggleFullscreen,
+                isPlaying: () => _avpro.IsPlaying,
+                togglePause: () => _avpro.TogglePause(),
+                stop: () => LoadSource("testpattern"));
 
             // HelperClient events fire on its background thread — marshal to Unity's main thread.
             _client.OnConnected += () => _services.Framework.Post(() =>
@@ -279,34 +291,53 @@ namespace Stellar.WorldScreen
                 if (IsInWorld()) PlaceScreen();
                 else _screen.SetVisible(false);
             }
-            if (_placed) PumpVolume(dt);
+            if (_placed)
+            {
+                var dist = ScreenDistance();
+                _playerNear = dist >= 0f && dist <= InteractRadius; // gates the action menu (ShouldRender)
+                if (_fullscreen.Visible) _fullscreen.SetTexture(tex, w, h);
+                PumpVolume(dt);
+            }
         }
 
-        // Distance-based volume: a few times a second, measure the player's (camera's) distance to the screen,
-        // map it to 0–100 (full within MinAudioDist, linear fade to silent past MaxAudioDist), and send it to
-        // the helper only when it changes. The helper applies it as a gain to the audio it plays via ffplay.
+        /// <summary>Action-menu button: toggle the full-screen "cinema" overlay of the current video.</summary>
+        private void ToggleFullscreen()
+        {
+            _fullscreen.Toggle();
+            if (_fullscreen.Visible)
+            {
+                var tex = _avpro.CurrentTexture();
+                if (tex != null)
+                {
+                    int w = _avpro.VideoWidth, h = _avpro.VideoHeight;
+                    if (w <= 0 || h <= 0) { w = tex.width; h = tex.height; }
+                    _fullscreen.SetTexture(tex, w, h);
+                }
+            }
+        }
+
+        // Distance from the listener (camera, else player eye) to the screen, or -1 if the screen isn't up.
+        private float ScreenDistance()
+        {
+            var root = _screen.Root;
+            if (root == null) return -1f;
+            var cam = GetActiveCamera();
+            Vector3 listener;
+            if (cam != null) listener = cam.transform.position;
+            else { var p = _services.PlayerState.Position; listener = new Vector3(p.X, p.Y + 1.6f, p.Z); }
+            return Vector3.Distance(listener, root.position);
+        }
+
+        // Distance-based volume: a few times a second map the screen distance to 0–100 (full within
+        // MinAudioDist, linear fade to silent past MaxAudioDist) and apply it, only when it changes.
         private void PumpVolume(float dt)
         {
             _volTimer += dt;
             if (_volTimer < 0.2f) return;
             _volTimer = 0f;
 
-            var root = _screen.Root;
-            if (root == null) return;
-
-            var cam = GetActiveCamera();
-            Vector3 listener;
-            if (cam != null)
-            {
-                listener = cam.transform.position;
-            }
-            else
-            {
-                var p = _services.PlayerState.Position;
-                listener = new Vector3(p.X, p.Y + 1.6f, p.Z);
-            }
-
-            float dist = Vector3.Distance(listener, root.position);
+            float dist = ScreenDistance();
+            if (dist < 0f) return;
             float t = Mathf.Clamp01((MaxAudioDist - dist) / (MaxAudioDist - MinAudioDist));
             int vol = Mathf.RoundToInt(t * 100f);
             if (vol == _lastVolume) return;
@@ -357,6 +388,8 @@ namespace Stellar.WorldScreen
         {
             if (_update != null) { _services.Framework.Update -= _update; _update = null; }
             try { _overlay.Remove(); } catch (Exception) { }
+            try { _actionMenu?.Remove(); } catch (Exception) { }
+            try { _fullscreen.Destroy(); } catch (Exception) { }
             try { _avpro.Destroy(); } catch (Exception) { }
             try { _client.Dispose(); } catch (Exception) { }
             try { _launcher.Stop(); } catch (Exception) { }

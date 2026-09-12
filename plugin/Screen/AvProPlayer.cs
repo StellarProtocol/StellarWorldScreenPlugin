@@ -63,6 +63,17 @@ namespace Stellar.WorldScreen.Screen
             if (_mp != null) _mp.AudioVolume = Mathf.Clamp01(v);
         }
 
+        /// <summary>True while the media is actively playing (false when paused/stopped/not ready).</summary>
+        public bool IsPlaying => _mp != null && _mp.Control != null && _mp.Control.IsPlaying();
+
+        /// <summary>Toggles play/pause.</summary>
+        public void TogglePause()
+        {
+            var c = _mp != null ? _mp.Control : null;
+            if (c == null) return;
+            if (c.IsPlaying()) c.Pause(); else c.Play();
+        }
+
         /// <summary>Stops playback and destroys the player.</summary>
         public void Destroy()
         {
