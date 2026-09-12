@@ -203,6 +203,8 @@ fn setup_local_audio(
 /// Spawns headless `ffplay` reading interleaved S16LE 48kHz stereo PCM from stdin (`pipe:0`). Runs with
 /// `SDL_VIDEODRIVER=dummy` for a windowless audio-only player under Proton; `-autoexit` plus stdin-EOF
 /// (when the pump drops its writer) means ffplay ends on its own — never an orphaned playback process.
+/// NB: channels are set with `-ch_layout stereo`, NOT ffmpeg's `-ac 2` — ffplay rejects `-ac` ("Option
+/// not found") and exits 1 at startup, which silently killed all audio (verified under Wine).
 fn spawn_ffplay(ffplay_path: &Path) -> Option<(Child, ChildStdin)> {
     let mut cmd = Command::new(ffplay_path);
     cmd.arg("-hide_banner")
@@ -214,8 +216,8 @@ fn spawn_ffplay(ffplay_path: &Path) -> Option<(Child, ChildStdin)> {
         .arg("s16le")
         .arg("-ar")
         .arg("48000")
-        .arg("-ac")
-        .arg("2")
+        .arg("-ch_layout")
+        .arg("stereo")
         .arg("-i")
         .arg("pipe:0")
         .env("SDL_VIDEODRIVER", "dummy")
