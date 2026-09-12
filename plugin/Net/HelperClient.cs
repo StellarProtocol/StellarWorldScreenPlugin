@@ -26,6 +26,7 @@ public sealed class HelperClient : IDisposable
     private const int MaxBackoffMs = 5000;
 
     private readonly FrameSink _sink;
+    private readonly Screen.AudioSink _audio;
 
     // Guards _writeStream: Send() (any caller thread) and the bg thread's HELLO write both take this
     // lock before touching the stream, so a write from either side is never interleaved with the other.
@@ -50,9 +51,10 @@ public sealed class HelperClient : IDisposable
     /// <summary>Raised on the background thread when the connection ends (error or clean EOF).</summary>
     public event Action? OnDisconnected;
 
-    public HelperClient(FrameSink sink)
+    public HelperClient(FrameSink sink, Screen.AudioSink audio)
     {
         _sink = sink ?? throw new ArgumentNullException(nameof(sink));
+        _audio = audio ?? throw new ArgumentNullException(nameof(audio));
     }
 
     /// <summary>Spawns the background connect/read thread. Call once; a second call is ignored.</summary>
@@ -215,6 +217,9 @@ public sealed class HelperClient : IDisposable
                 break;
             case WireType.Status:
                 OnStatus?.Invoke(msg.Status);
+                break;
+            case WireType.Audio:
+                _audio.Submit(msg.Audio.Pcm); // S16LE PCM → sink; the audio thread pulls it for 3D playback
                 break;
             default:
                 break; // ignore any other/unexpected H→P type — never crash the read thread on it

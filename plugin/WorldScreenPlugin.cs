@@ -22,6 +22,7 @@ namespace Stellar.WorldScreen
         private readonly IPluginServices _services;
         private readonly IPluginLog _log;
         private readonly FrameSink _sink = new();
+        private readonly Screen.AudioSink _audioSink = new();
         private readonly HelperLauncher _launcher;
         private readonly HelperClient _client;
         private readonly WorldScreenView _screen = new();
@@ -48,7 +49,8 @@ namespace Stellar.WorldScreen
             _services = services ?? throw new ArgumentNullException(nameof(services));
             _log = services.Log;
             _launcher = new HelperLauncher(_log.Info);
-            _client = new HelperClient(_sink);
+            _client = new HelperClient(_sink, _audioSink);
+            _screen.AttachAudio(_audioSink); // 3D positional audio: the screen's AudioSource pulls PCM from here
             _overlay = new UI.OverlayPanel(services, LoadSource, HandleControl, QualityLabels(), () => _quality, SetQuality);
 
             // HelperClient events fire on its background thread — marshal to Unity's main thread.
@@ -85,6 +87,7 @@ namespace Stellar.WorldScreen
             _currentSource = sourceSpec;
             _log.Info($"[WorldScreen] loading source: {RedactSource(sourceSpec)}");
             _overlay.SetStatus("Loading…");
+            _audioSink.Clear(); // drop the old source's buffered PCM so the new source starts clean
             _launcher.Restart(_exePath, BuildArgs(sourceSpec));
         }
 

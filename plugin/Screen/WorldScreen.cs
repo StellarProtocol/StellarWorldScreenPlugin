@@ -1,6 +1,8 @@
 using System;
 using UnityEngine;
 using UnityEngine.UI;
+using Il2CppInterop.Runtime;
+using Il2CppInterop.Runtime.InteropTypes.Arrays;
 
 namespace Stellar.WorldScreen.Screen
 {
@@ -17,6 +19,16 @@ namespace Stellar.WorldScreen.Screen
         private RawImage? _image;
         private Texture2D? _tex;
         private int _texW, _texH;
+
+        // 3D positional audio: an AudioSource on the (world-positioned) root pulls PCM from _audio via a
+        // streaming AudioClip. Volume falls off with the listener's distance from the screen (see EnsureAudio).
+        private AudioSource? _audioSource;
+        private AudioClip? _audioClip;
+        private AudioSink? _audio;
+        // Unity's audio thread invokes _pcmCallback; it MUST stay referenced (GC root) or the native call
+        // crashes. _pcmScratch bridges the interop Il2CppStructArray<float> to AudioSink's float[] API.
+        private AudioClip.PCMReaderCallback? _pcmCallback;
+        private float[] _pcmScratch = System.Array.Empty<float>();
 
         // World width of the screen in metres; height follows the frame aspect. Tunable in Milestone C.
         private float _widthMetres = 3f;
@@ -46,7 +58,52 @@ namespace Stellar.WorldScreen.Screen
                 // raw upload displays upside-down. Flip vertically via the UV rect (free — no per-frame cost).
                 _image.uvRect = new Rect(0f, 1f, 1f, -1f);
             }
+            EnsureAudio();
             EnsureTexture(w, h);
+        }
+
+        /// <summary>
+        /// Registers the PCM ring buffer the screen's 3D <see cref="AudioSource"/> pulls from. Call once,
+        /// before the screen is created; <see cref="EnsureAudio"/> then builds the streaming clip on creation.
+        /// </summary>
+        public void AttachAudio(AudioSink sink) => _audio = sink;
+
+        // Builds the streaming AudioClip + 3D AudioSource on the root once (idempotent). The AudioSource lives
+        // on the world-positioned root, so Unity attenuates it by the listener's (player/camera) distance:
+        // full volume within minDistance, fading linearly to silence at maxDistance — "quieter when far, gone
+        // when very far". The clip is streamed: Unity invokes _audio.ReadInto on the audio thread to fill it,
+        // and _audio hands back silence on underrun so a gap never desyncs playback.
+        private void EnsureAudio()
+        {
+            if (_root == null || _audio == null || _audioSource != null) return;
+            // Streaming clip: Unity calls _pcmCallback on the audio thread to pull the next PCM chunk.
+            // Il2CppInterop delegates aren't constructed from a managed method group directly — convert one.
+            _pcmCallback = DelegateSupport.ConvertDelegate<AudioClip.PCMReaderCallback>(
+                (Action<Il2CppStructArray<float>>)OnPcmRead);
+            _audioClip = AudioClip.Create("StellarWorldScreenAudio", 48000, 2, 48000, true, _pcmCallback);
+            _audioSource = _root.AddComponent<AudioSource>();
+            _audioSource.clip = _audioClip;
+            _audioSource.loop = true;
+            _audioSource.playOnAwake = true;                    // resume when the root is re-activated (SetVisible)
+            _audioSource.spatialBlend = 1f;                     // fully 3D — position-attenuated, not 2D flat
+            _audioSource.rolloffMode = AudioRolloffMode.Linear; // linear fade → truly silent past maxDistance
+            _audioSource.minDistance = 3f;                      // full volume within 3 m of the screen
+            _audioSource.maxDistance = 40f;                     // inaudible beyond 40 m
+            _audioSource.dopplerLevel = 0f;                     // a screen shouldn't pitch-shift as you move
+            _audioSource.Play();
+        }
+
+        // Unity audio thread: fill `data` (interleaved stereo floats) with the next PCM from the sink. The
+        // sink hands back silence on underrun, so a starved buffer plays a gap rather than desyncing. Bridges
+        // the interop array through a same-length reusable scratch so AudioSink stays pure BCL (float[] only).
+        private void OnPcmRead(Il2CppStructArray<float> data)
+        {
+            if (_audio == null) return;
+            int n = data.Length;
+            if (n <= 0) return;
+            if (_pcmScratch.Length != n) _pcmScratch = new float[n];
+            _audio.ReadInto(_pcmScratch);
+            for (int i = 0; i < n; i++) data[i] = _pcmScratch[i];
         }
 
         /// <summary>Uploads a raw RGBA32 frame (length ≥ w*h*4) into the screen texture. Main thread only.</summary>
@@ -106,9 +163,13 @@ namespace Stellar.WorldScreen.Screen
             if (_root != null) _root.SetActive(visible);
         }
 
-        /// <summary>Destroys the screen and its texture.</summary>
+        /// <summary>Destroys the screen, its texture, and its audio clip.</summary>
         public void Destroy()
         {
+            if (_audioSource != null) { _audioSource.Stop(); _audioSource = null; }
+            if (_audioClip != null) { UnityEngine.Object.Destroy(_audioClip); _audioClip = null; }
+            _pcmCallback = null;                        // release the GC root now the audio thread is done
+            _pcmScratch = System.Array.Empty<float>();
             if (_tex != null) { UnityEngine.Object.Destroy(_tex); _tex = null; }
             if (_root != null) { UnityEngine.Object.Destroy(_root); _root = null; _image = null; }
             _texW = _texH = 0;

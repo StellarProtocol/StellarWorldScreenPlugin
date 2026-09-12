@@ -22,6 +22,7 @@ public enum WireType : byte
     Frame = 0x03,
     Status = 0x04,
     Control = 0x05,
+    Audio = 0x06,
 }
 
 /// <summary>CONTROL (0x05) op byte — docs/protocol.md § CONTROL ops.</summary>
@@ -89,6 +90,17 @@ public readonly struct StatusMsg
 }
 
 /// <summary>
+/// AUDIO (0x06) payload: interleaved S16LE PCM, 48000 Hz, 2 channels. <see cref="Pcm"/> is an
+/// <see cref="ArraySegment{T}"/> over <see cref="WireReader"/>'s reused buffer — consume/copy it before
+/// the next read (same contract as <see cref="FrameMsg.Pixels"/>).
+/// </summary>
+public readonly struct AudioMsg
+{
+    public readonly ArraySegment<byte> Pcm;
+    public AudioMsg(ArraySegment<byte> pcm) => Pcm = pcm;
+}
+
+/// <summary>
 /// One decoded message from the helper. Only the field matching <see cref="Type"/> is meaningful; the
 /// other two carry their default value. Built exclusively via <see cref="WireReader"/>'s internal
 /// factories — plugin code only ever receives one as an <c>out</c> parameter of
@@ -100,19 +112,22 @@ public readonly struct WireMessage
     public readonly StreamInfoMsg StreamInfo;
     public readonly FrameMsg Frame;
     public readonly StatusMsg Status;
+    public readonly AudioMsg Audio;
 
-    private WireMessage(WireType type, StreamInfoMsg streamInfo, FrameMsg frame, StatusMsg status)
+    private WireMessage(WireType type, StreamInfoMsg streamInfo, FrameMsg frame, StatusMsg status, AudioMsg audio)
     {
         Type = type;
         StreamInfo = streamInfo;
         Frame = frame;
         Status = status;
+        Audio = audio;
     }
 
-    internal static WireMessage OfStreamInfo(StreamInfoMsg info) => new(WireType.StreamInfo, info, default, default);
-    internal static WireMessage OfFrame(FrameMsg frame) => new(WireType.Frame, default, frame, default);
-    internal static WireMessage OfStatus(StatusMsg status) => new(WireType.Status, default, default, status);
-    internal static WireMessage OfBareType(WireType type) => new(type, default, default, default);
+    internal static WireMessage OfStreamInfo(StreamInfoMsg info) => new(WireType.StreamInfo, info, default, default, default);
+    internal static WireMessage OfFrame(FrameMsg frame) => new(WireType.Frame, default, frame, default, default);
+    internal static WireMessage OfStatus(StatusMsg status) => new(WireType.Status, default, default, status, default);
+    internal static WireMessage OfAudio(AudioMsg audio) => new(WireType.Audio, default, default, default, audio);
+    internal static WireMessage OfBareType(WireType type) => new(type, default, default, default, default);
 }
 
 /// <summary>
@@ -272,6 +287,7 @@ public sealed class WireReader
             WireType.StreamInfo => WireMessage.OfStreamInfo(ParseStreamInfo(buf, len, ref pos)),
             WireType.Frame => WireMessage.OfFrame(ParseFrame(buf, len, ref pos)),
             WireType.Status => WireMessage.OfStatus(ParseStatus(buf, len, ref pos)),
+            WireType.Audio => WireMessage.OfAudio(new AudioMsg(new ArraySegment<byte>(buf, pos, len - pos))),
             WireType.Hello or WireType.Control => WireMessage.OfBareType(type),
             _ => throw new InvalidDataException($"unknown message type 0x{(byte)type:x2}"),
         };

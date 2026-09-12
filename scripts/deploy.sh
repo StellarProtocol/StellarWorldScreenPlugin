@@ -7,6 +7,13 @@ export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DOTNET=/home/dorasu/.dotnet/dotnet
 
+GM="$(ls -d /opt/game/BlueProtocol2/drive_c/Star/StarLauncher/game/release_*/game_mini 2>/dev/null | sort -V | tail -1)"
+[ -n "$GM" ] || { echo "no game_mini found" >&2; exit 1; }
+
+echo "=== vendor AudioModule interop stub (not in InteropRefs; needed for 3D audio) ==="
+mkdir -p "$ROOT/plugin/refs"
+cp -f "$GM/BepInEx/interop/UnityEngine.AudioModule.dll" "$ROOT/plugin/refs/UnityEngine.AudioModule.dll"
+
 echo "=== build plugin (Release) ==="
 "$DOTNET" build "$ROOT/plugin/Stellar.WorldScreen.csproj" -c Release --nologo
 DLL="$ROOT/plugin/bin/Release/Stellar.WorldScreen.dll"
@@ -15,20 +22,19 @@ echo "=== build helper (Windows .exe) ==="
 bash "$ROOT/scripts/build-helper.sh" >/dev/null
 EXE="$ROOT/helper/target/x86_64-pc-windows-gnu/release/stellar-castbox.exe"
 
-echo "=== ensure vendor media (ffmpeg.exe / ffplay.exe / yt-dlp.exe) ==="
-{ [ -f "$ROOT/vendor/ffmpeg.exe" ] && [ -f "$ROOT/vendor/ffplay.exe" ]; } || bash "$ROOT/scripts/fetch-vendor.sh"
+echo "=== ensure vendor media (ffmpeg.exe / yt-dlp.exe) ==="
+[ -f "$ROOT/vendor/ffmpeg.exe" ] || bash "$ROOT/scripts/fetch-vendor.sh"
 
-GM="$(ls -d /opt/game/BlueProtocol2/drive_c/Star/StarLauncher/game/release_*/game_mini 2>/dev/null | sort -V | tail -1)"
-[ -n "$GM" ] || { echo "no game_mini found" >&2; exit 1; }
 SLOT="$GM/stellar/plugins/worldscreen"   # lowercase — never capitalize
 
 mkdir -p "$SLOT"
 cp -f "$DLL" "$SLOT/Stellar.WorldScreen.dll"
 cp -f "$EXE" "$SLOT/stellar-castbox.exe"
-cp -f "$ROOT/vendor/ffmpeg.exe" "$SLOT/ffmpeg.exe"                       # helper resolves as sibling
-[ -f "$ROOT/vendor/ffplay.exe" ] && cp -f "$ROOT/vendor/ffplay.exe" "$SLOT/ffplay.exe" || true  # audio
+cp -f "$ROOT/vendor/ffmpeg.exe" "$SLOT/ffmpeg.exe"                       # decodes video + audio (as sibling)
 [ -f "$ROOT/vendor/yt-dlp.exe" ] && cp -f "$ROOT/vendor/yt-dlp.exe" "$SLOT/yt-dlp.exe" || true
 [ -f "$ROOT/vendor/test-clip.mp4" ] && cp -f "$ROOT/vendor/test-clip.mp4" "$SLOT/test-clip.mp4" || true
+# ffplay.exe is no longer used (audio now streams over the wire to a Unity 3D AudioSource) — drop any stale copy.
+rm -f "$SLOT/ffplay.exe" 2>/dev/null || true
 
 echo "=== deployed to $SLOT ==="
 ls -la "$SLOT"
