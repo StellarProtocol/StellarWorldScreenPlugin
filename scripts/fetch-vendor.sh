@@ -15,12 +15,12 @@ if [ ! -f "$VENDOR/yt-dlp.exe" ]; then
 fi
 ls -la "$VENDOR/yt-dlp.exe"
 
-echo "=== ffmpeg.exe (BtbN static win64 gpl) ==="
-if [ ! -f "$VENDOR/ffmpeg.exe" ]; then
+echo "=== ffmpeg.exe + ffplay.exe (BtbN static win64 gpl) ==="
+if [ ! -f "$VENDOR/ffmpeg.exe" ] || [ ! -f "$VENDOR/ffplay.exe" ]; then
     curl -sSfL --retry 3 -o "$TMP/ffmpeg.zip" \
         https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip
-    # extract only ffmpeg.exe (+ ffprobe.exe) from the bin/ dir, flattening into vendor/
-    (cd "$TMP" && unzip -o -j ffmpeg.zip '*/bin/ffmpeg.exe' '*/bin/ffprobe.exe' -d "$VENDOR" >/dev/null)
+    # extract ffmpeg.exe (video decode) + ffplay.exe (audio playback) from bin/, flattening into vendor/
+    (cd "$TMP" && unzip -o -j ffmpeg.zip '*/bin/ffmpeg.exe' '*/bin/ffplay.exe' -d "$VENDOR" >/dev/null)
 fi
-ls -la "$VENDOR/ffmpeg.exe" "$VENDOR/ffprobe.exe" 2>/dev/null || true
+ls -la "$VENDOR/ffmpeg.exe" "$VENDOR/ffplay.exe" 2>/dev/null || true
 echo "=== done ==="

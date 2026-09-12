@@ -88,6 +88,9 @@ pub struct FfmpegSource {
     title: String,
     pts_ms: u64,
     buf: Vec<u8>,
+    /// Optional ffplay process playing the input's audio; kept alive for `kill_on_drop`. Never read.
+    #[allow(dead_code)]
+    audio: Option<Child>,
 }
 
 impl FfmpegSource {
@@ -101,6 +104,7 @@ impl FfmpegSource {
         h: u16,
         fps: u8,
         ffmpeg_path: PathBuf,
+        ffplay_path: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
         let title = derive_title(&input);
         let input_value: &str = match &input {
@@ -136,7 +140,48 @@ impl FfmpegSource {
             .with_context(|| format!("spawn ffmpeg at {}", ffmpeg_path.display()))?;
         let stdout = child.stdout.take().context("ffmpeg child produced no stdout pipe")?;
 
-        Ok(Self { child, stdout, w, h, fps, title, pts_ms: 0, buf: vec![0u8; w as usize * h as usize * 4] })
+        let audio = ffplay_path
+            .and_then(|pp| spawn_audio(pp, input_value, matches!(input, FfmpegInput::File(_))));
+
+        Ok(Self {
+            child,
+            stdout,
+            w,
+            h,
+            fps,
+            title,
+            pts_ms: 0,
+            buf: vec![0u8; w as usize * h as usize * 4],
+            audio,
+        })
+    }
+}
+
+/// Spawns `ffplay` to play the input's audio on the host (its SDL audio routes through Wine to the host,
+/// like the game's own audio). Best-effort: on any failure the video still plays, just silent. `-nodisp`
+/// = no window; local files loop to match the video's `-stream_loop -1`. Two independent decodes, so
+/// A/V sync is tight for files and can drift a little on streamed URLs.
+fn spawn_audio(ffplay_path: PathBuf, input: &str, is_file: bool) -> Option<Child> {
+    let mut cmd = Command::new(&ffplay_path);
+    // ffplay is an SDL app; force a headless (dummy) VIDEO driver so it never needs a display/window,
+    // while its AUDIO still uses the real device — verified ffplay runs headless this way under Wine.
+    cmd.env("SDL_VIDEODRIVER", "dummy");
+    cmd.arg("-hide_banner").arg("-loglevel").arg("error").arg("-nodisp").arg("-autoexit");
+    if is_file {
+        cmd.arg("-loop").arg("0");
+    }
+    cmd.arg("-i")
+        .arg(input)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    match cmd.spawn() {
+        Ok(c) => Some(c),
+        Err(e) => {
+            eprintln!("[ffmpeg source] audio (ffplay) failed to start: {e}");
+            None
+        }
     }
 }
 
@@ -275,7 +320,7 @@ mod fake_ffmpeg_tests {
         let fake = write_fake_ffmpeg(frame_bytes, 3);
 
         let mut source =
-            FfmpegSource::spawn(FfmpegInput::File("ignored.mp4".into()), w, h, fps, fake.clone())
+            FfmpegSource::spawn(FfmpegInput::File("ignored.mp4".into()), w, h, fps, fake.clone(), None)
                 .expect("spawn fake ffmpeg");
 
         for i in 0..3u64 {

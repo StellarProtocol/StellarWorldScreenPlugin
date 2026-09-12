@@ -40,8 +40,10 @@ async fn main() -> anyhow::Result<()> {
         other if other.starts_with("file:") => {
             let path = other["file:".len()..].to_string();
             let ffmpeg_path = resolve_ffmpeg_path(args.ffmpeg.as_deref())?;
-            let source =
-                FfmpegSource::spawn(FfmpegInput::File(path), DEFAULT_W, DEFAULT_H, DEFAULT_FPS, ffmpeg_path)?;
+            let ffplay_path = resolve_ffplay_path(args.ffplay.as_deref());
+            let source = FfmpegSource::spawn(
+                FfmpegInput::File(path), DEFAULT_W, DEFAULT_H, DEFAULT_FPS, ffmpeg_path, ffplay_path,
+            )?;
             server::serve(args.listen, source, control_tx).await
         }
         other if other.starts_with("url:") => {
@@ -59,12 +61,14 @@ async fn main() -> anyhow::Result<()> {
                 );
                 resolved
             };
+            let ffplay_path = resolve_ffplay_path(args.ffplay.as_deref());
             let source = FfmpegSource::spawn(
                 FfmpegInput::Url(direct_url),
                 DEFAULT_W,
                 DEFAULT_H,
                 DEFAULT_FPS,
                 ffmpeg_path,
+                ffplay_path,
             )?;
             server::serve(args.listen, source, control_tx).await
         }
@@ -127,13 +131,25 @@ fn resolve_ytdlp_path(override_path: Option<&str>) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-/// Minimal hand-rolled CLI (`--listen ADDR`, `--source NAME`, `--ffmpeg PATH`, `--ytdlp PATH`) —
-/// not worth an extra dependency for four flags.
+/// Resolves the `ffplay.exe` used for audio playback: `--ffplay <path>` if given, else the sibling
+/// `ffplay.exe`. Audio is OPTIONAL — returns `None` (silent video) rather than erroring if it's absent,
+/// so a bundle without ffplay still plays video.
+fn resolve_ffplay_path(override_path: Option<&str>) -> Option<PathBuf> {
+    let path = match override_path {
+        Some(p) => PathBuf::from(p),
+        None => std::env::current_exe().ok()?.parent()?.join("ffplay.exe"),
+    };
+    path.exists().then_some(path)
+}
+
+/// Minimal hand-rolled CLI (`--listen ADDR`, `--source NAME`, `--ffmpeg/--ytdlp/--ffplay PATH`) —
+/// not worth an extra dependency for a handful of flags.
 struct Args {
     listen: SocketAddr,
     source: String,
     ffmpeg: Option<String>,
     ytdlp: Option<String>,
+    ffplay: Option<String>,
 }
 
 impl Args {
@@ -142,6 +158,7 @@ impl Args {
         let mut source = "testpattern".to_string();
         let mut ffmpeg = None;
         let mut ytdlp = None;
+        let mut ffplay = None;
         let mut it = args;
         while let Some(arg) = it.next() {
             match arg.as_str() {
@@ -158,9 +175,12 @@ impl Args {
                 "--ytdlp" => {
                     ytdlp = Some(it.next().expect("--ytdlp requires a path"));
                 }
+                "--ffplay" => {
+                    ffplay = Some(it.next().expect("--ffplay requires a path"));
+                }
                 other => eprintln!("warning: ignoring unknown argument '{other}'"),
             }
         }
-        Self { listen, source, ffmpeg, ytdlp }
+        Self { listen, source, ffmpeg, ytdlp, ffplay }
     }
 }
