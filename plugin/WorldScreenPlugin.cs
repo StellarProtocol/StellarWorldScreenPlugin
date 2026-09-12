@@ -51,8 +51,9 @@ namespace Stellar.WorldScreen
             ("360p", 640, 360),
             ("480p", 854, 480),
             ("720p", 1280, 720),
+            ("1080p", 1920, 1080),
         };
-        private int _quality;                          // index into Qualities (0 = 360p default)
+        private int _quality = 2;                       // index into Qualities (default 720p)
         private string _currentSource = "testpattern"; // last-loaded source, so a quality change reloads it
 
         public string Name => "World Screen";
