@@ -19,10 +19,14 @@ namespace Stellar.WorldScreen
         private const int HelperPort = 47800;
         private const string ListenArg = "--listen 127.0.0.1:47800";
 
+        // Distance-based audio: the helper (ffplay) plays the sound; the plugin sends it a 0–100 volume from
+        // the player's in-world distance to the screen. Full within MinAudioDist, silent past MaxAudioDist.
+        private const float MinAudioDist = 3f;
+        private const float MaxAudioDist = 40f;
+
         private readonly IPluginServices _services;
         private readonly IPluginLog _log;
         private readonly FrameSink _sink = new();
-        private readonly Screen.AudioSink _audioSink = new();
         private readonly HelperLauncher _launcher;
         private readonly HelperClient _client;
         private readonly WorldScreenView _screen = new();
@@ -31,9 +35,8 @@ namespace Stellar.WorldScreen
 
         private Action<float>? _update;
         private bool _placed;
-        private GameObject? _listenerObj;   // our Unity AudioListener (the game's audio is Wwise → it ships none)
-        private bool _listenerChecked;
-        private float _audioDiagTimer;
+        private float _volTimer;
+        private int _lastVolume = -1; // last volume sent to the helper (−1 = none yet), so we only send on change
 
         // Render-quality presets (label, width, height); the index is the overlay dropdown selection.
         private static readonly (string Label, int W, int H)[] Qualities =
@@ -52,8 +55,7 @@ namespace Stellar.WorldScreen
             _services = services ?? throw new ArgumentNullException(nameof(services));
             _log = services.Log;
             _launcher = new HelperLauncher(_log.Info);
-            _client = new HelperClient(_sink, _audioSink);
-            _screen.AttachAudio(_audioSink); // 3D positional audio: the screen's AudioSource pulls PCM from here
+            _client = new HelperClient(_sink);
             _overlay = new UI.OverlayPanel(services, LoadSource, HandleControl, QualityLabels(), () => _quality, SetQuality);
 
             // HelperClient events fire on its background thread — marshal to Unity's main thread.
@@ -90,7 +92,7 @@ namespace Stellar.WorldScreen
             _currentSource = sourceSpec;
             _log.Info($"[WorldScreen] loading source: {RedactSource(sourceSpec)}");
             _overlay.SetStatus("Loading…");
-            _audioSink.Clear(); // drop the old source's buffered PCM so the new source starts clean
+            _lastVolume = -1; // force a volume resend once the relaunched helper reconnects
             _launcher.Restart(_exePath, BuildArgs(sourceSpec));
         }
 
@@ -177,51 +179,39 @@ namespace Stellar.WorldScreen
                 PlaceScreen();
 
             if (_placed)
-            {
-                EnsureAudioListener();
-                PumpAudioDiag(dt);
-            }
+                PumpVolume(dt);
         }
 
-        // The game routes audio through Wwise, which ships no Unity AudioListener — so a Unity AudioSource is
-        // inaudible. Provide one (following the camera, at the player's ears) unless the game already has one.
-        private void EnsureAudioListener()
+        // Distance-based volume: a few times a second, measure the player's (camera's) distance to the screen,
+        // map it to 0–100 (full within MinAudioDist, linear fade to silent past MaxAudioDist), and send it to
+        // the helper only when it changes. The helper applies it as a gain to the audio it plays via ffplay.
+        private void PumpVolume(float dt)
         {
-            if (!_listenerChecked)
-            {
-                _listenerChecked = true;
-                if (UnityEngine.Object.FindObjectOfType<AudioListener>() != null)
-                {
-                    _log.Info("[WorldScreen] Unity AudioListener already present — using it");
-                }
-                else
-                {
-                    _listenerObj = new GameObject("StellarAudioListener");
-                    UnityEngine.Object.DontDestroyOnLoad(_listenerObj);
-                    _listenerObj.AddComponent<AudioListener>();
-                    _log.Info("[WorldScreen] no Unity AudioListener (Wwise game) — added our own");
-                }
-            }
-            if (_listenerObj == null) return;
+            _volTimer += dt;
+            if (_volTimer < 0.2f) return;
+            _volTimer = 0f;
+
+            var root = _screen.Root;
+            if (root == null) return;
+
             var cam = GetActiveCamera();
+            Vector3 listener;
             if (cam != null)
-                _listenerObj.transform.SetPositionAndRotation(cam.transform.position, cam.transform.rotation);
+            {
+                listener = cam.transform.position;
+            }
             else
             {
                 var p = _services.PlayerState.Position;
-                _listenerObj.transform.position = new Vector3(p.X, p.Y + 1.6f, p.Z);
+                listener = new Vector3(p.X, p.Y + 1.6f, p.Z);
             }
-        }
 
-        // Every ~3s, log where the audio pipeline stands so a still-silent build tells us the failing boundary:
-        // dspTime advancing => Unity audio DSP alive; submitted>0 => wire delivering PCM; callbacks>0 => Unity
-        // pulling from our clip. All three up but silent => a listener/routing problem, not a data problem.
-        private void PumpAudioDiag(float dt)
-        {
-            _audioDiagTimer += dt;
-            if (_audioDiagTimer < 3f) return;
-            _audioDiagTimer = 0f;
-            _log.Info($"[WorldScreen][audio] dspTime={AudioSettings.dspTime:F2} ownListener={_listenerObj != null} {_screen.AudioDiag()}");
+            float dist = Vector3.Distance(listener, root.position);
+            float t = Mathf.Clamp01((MaxAudioDist - dist) / (MaxAudioDist - MinAudioDist));
+            int vol = Mathf.RoundToInt(t * 100f);
+            if (vol == _lastVolume) return;
+            _lastVolume = vol;
+            _client.Send(Net.ControlOp.Volume, volume: (byte)vol);
         }
 
         private void PlaceScreen()

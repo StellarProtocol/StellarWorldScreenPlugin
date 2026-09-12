@@ -18,13 +18,6 @@
          WorldScreen uses only long-stable interfaces present in 2.7.0. -->
     <PackageReference Include="Stellar.Abstractions" Version="2.7.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
-    <!-- UnityEngine.AudioModule (AudioSource/AudioClip for 3D positional audio) is NOT in the
-         InteropRefs package; deploy.sh vendors the game's own interop stub into plugin/refs/.
-         Private=false: the framework/game provides it at runtime — never ship it in the bundle. -->
-    <Reference Include="UnityEngine.AudioModule">
-      <HintPath>refs/UnityEngine.AudioModule.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="tests/**/*.cs" />

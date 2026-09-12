@@ -23,6 +23,5 @@
          ProjectReference to Stellar.WorldScreen.csproj, which pulls in Abstractions/InteropRefs). -->
     <Compile Include="../Net/WireCodec.cs" />
     <Compile Include="../Screen/FrameSink.cs" />
-    <Compile Include="../Screen/AudioSink.cs" />
   </ItemGroup>
 </Project>

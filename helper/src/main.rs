@@ -27,9 +27,18 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse(std::env::args().skip(1));
     eprintln!("stellar-castbox {} — listening on {} (source: {})", env!("CARGO_PKG_VERSION"), args.listen, redact_source(&args.source));
 
+    // Playback gain in [0,1] (f32 bits), shared with the audio pump. The plugin drives it via CONTROL
+    // Volume from the player's in-world distance to the screen (the game's audio is Wwise, so Unity's own
+    // AudioSource is silent — attenuation is applied here, to the PCM we play through ffplay).
+    let gain = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits()));
+    let gain_ctl = std::sync::Arc::clone(&gain);
     let (control_tx, mut control_rx) = tokio::sync::mpsc::channel::<Control>(16);
     tokio::spawn(async move {
         while let Some(c) = control_rx.recv().await {
+            if let Control::Volume(v) = c {
+                let g = (v as f32 / 100.0).clamp(0.0, 1.0);
+                gain_ctl.store(g.to_bits(), std::sync::atomic::Ordering::Relaxed);
+            }
             eprintln!("[control] {c:?}");
         }
     });
@@ -45,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
             // A file carries its own audio, decoded by a second ffmpeg from the same file.
             let audio_out = Some((ffmpeg_path.clone(), path.clone()));
             let source = FfmpegSource::spawn(
-                FfmpegInput::File(path), args.width, args.height, DEFAULT_FPS, ffmpeg_path, audio_out,
+                FfmpegInput::File(path), args.width, args.height, DEFAULT_FPS, ffmpeg_path, audio_out, gain,
             )?;
             server::serve(args.listen, source, control_tx).await
         }
@@ -77,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
                 DEFAULT_FPS,
                 ffmpeg_path,
                 audio_out,
+                gain,
             )?;
             server::serve(args.listen, source, control_tx).await
         }
