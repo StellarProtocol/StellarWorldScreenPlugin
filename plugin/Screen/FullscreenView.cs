@@ -56,7 +56,9 @@ namespace Stellar.WorldScreen.Screen
 
             var canvas = _root.AddComponent<Canvas>();
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            canvas.sortingOrder = 5000; // above the game HUD and framework overlay
+            // Above the game HUD and the framework HUD (32750), just below framework windows (32755) — so the
+            // opaque backdrop hides ALL HUD, and only the control-bar window (a framework window) shows on top.
+            canvas.sortingOrder = 32754;
 
             // Black backdrop filling the screen (Image with no sprite draws its solid colour).
             var bgGo = new GameObject("Backdrop");

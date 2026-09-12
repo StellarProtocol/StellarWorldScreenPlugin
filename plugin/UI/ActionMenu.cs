@@ -5,9 +5,9 @@ using Stellar.Abstractions.Services;
 namespace Stellar.WorldScreen.UI
 {
     /// <summary>
-    /// A compact "you're near the screen" action menu, shown by the framework only while the player is close
-    /// to the world screen (or while full-screen is active, so it can be exited). Offers full-screen toggle,
-    /// play/pause, and stop. Built from the framework's declarative window elements; main thread only.
+    /// A bottom control bar for the world screen: a horizontal row of playback actions shown by the framework
+    /// only while the player is close to the screen OR while full-screen is active. In full-screen it is the
+    /// only visible UI (the video backdrop hides everything else). Framework window; main thread only.
     /// </summary>
     internal sealed class ActionMenu
     {
@@ -22,13 +22,14 @@ namespace Stellar.WorldScreen.UI
             Action togglePause,
             Action stop)
         {
+            // Bottom-centre-ish (assumes ~1080p; draggable if off). y is from the top.
             var spec = new WindowSpec(
-                "worldscreen.actions", "Screen Actions",
-                new WindowRect(700f, 200f, 220f, 0f),
+                "worldscreen.actions", "Screen Controls",
+                new WindowRect(700f, 980f, 0f, 0f),
                 WindowCategory.Tools, WindowPanelStyle.Tracker)
             {
-                // Open from the start; ShouldRender does the proximity gating each frame (a window left
-                // StartVisible=false stays CLOSED and ShouldRender never reopens it — that hid the menu).
+                // Open from the start; ShouldRender does the proximity/full-screen gating each frame (a window
+                // left StartVisible=false stays CLOSED and ShouldRender never reopens it — that hid the menu).
                 ShouldRender = shouldRender,
                 StartVisible = true,
                 Draggable = true,
@@ -36,11 +37,12 @@ namespace Stellar.WorldScreen.UI
             };
             var root = new ColumnElement(new HudElement[]
             {
-                new TextElement(() => "Screen nearby"),
-                new SeparatorElement(),
-                new ButtonElement(() => isFullscreen() ? "Exit full screen" : "Full screen", toggleFullscreen),
-                new ButtonElement(() => isPlaying() ? "Pause" : "Play", togglePause),
-                new ButtonElement(() => "Stop", stop),
+                new RowElement(new HudElement[]
+                {
+                    new ButtonElement(() => isPlaying() ? "Pause" : "Play", togglePause),
+                    new ButtonElement(() => "Stop", stop),
+                    new ButtonElement(() => isFullscreen() ? "Exit full screen" : "Full screen", toggleFullscreen),
+                }, 8f),
             }, 6f)
             { Padding = 8 };
             _control = services.Windows.Register(new WindowRegistration(spec, root));

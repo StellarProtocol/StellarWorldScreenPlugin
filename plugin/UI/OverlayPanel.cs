@@ -21,7 +21,7 @@ namespace Stellar.WorldScreen.UI
         private string _status = "Helper: starting…";
 
         public OverlayPanel(IPluginServices services, Action<string> loadSource, Action<string> onControl,
-            string[] qualityLabels, Func<int> currentQuality, Action<int> onQuality)
+            string[] qualityLabels, Func<int> currentQuality, Action<int> onQuality, Func<bool>? shouldRender = null)
         {
             _load = loadSource;
             _onCmd = onControl;
@@ -33,7 +33,7 @@ namespace Stellar.WorldScreen.UI
                 new WindowRect(40f, 120f, 320f, 0f),
                 WindowCategory.Tools, WindowPanelStyle.Tracker)
             {
-                ShouldRender = () => true,
+                ShouldRender = shouldRender ?? (() => true), // hidden during full-screen (the cinema view is clean)
                 StartVisible = true,
                 Draggable = true,
                 Closable = true,

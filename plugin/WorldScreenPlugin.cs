@@ -34,7 +34,6 @@ namespace Stellar.WorldScreen
         private UI.ActionMenu? _actionMenu;
         private bool _avproInitDone;
         private bool _playerNear;
-        private float _proxDiagTimer;
 
         private readonly IPluginServices _services;
         private readonly IPluginLog _log;
@@ -72,7 +71,8 @@ namespace Stellar.WorldScreen
             _client = new HelperClient(_sink);
             var slotDir = System.IO.Path.GetDirectoryName(_exePath) ?? ".";
             _resolver = new Net.YtDlpResolver(System.IO.Path.Combine(slotDir, "yt-dlp.exe"), slotDir);
-            _overlay = new UI.OverlayPanel(services, LoadSource, HandleControl, QualityLabels(), () => _quality, SetQuality);
+            _overlay = new UI.OverlayPanel(services, LoadSource, HandleControl, QualityLabels(), () => _quality, SetQuality,
+                shouldRender: () => !_fullscreen.Visible);
             _actionMenu = new UI.ActionMenu(
                 services,
                 shouldRender: () => (_playerNear || _fullscreen.Visible) && _avpro.Exists,
@@ -295,13 +295,7 @@ namespace Stellar.WorldScreen
             if (_placed)
             {
                 var dist = ScreenDistance();
-                _playerNear = dist >= 0f && dist <= InteractRadius; // gates the action menu (ShouldRender)
-                _proxDiagTimer += dt;
-                if (_proxDiagTimer >= 2f)
-                {
-                    _proxDiagTimer = 0f;
-                    _log.Info($"[WorldScreen] dist={dist:F1}m near={_playerNear} exists={_avpro.Exists} fs={_fullscreen.Visible}");
-                }
+                _playerNear = dist >= 0f && dist <= InteractRadius; // gates the control bar (ShouldRender)
                 if (_fullscreen.Visible) _fullscreen.SetTexture(tex, w, h);
                 PumpVolume(dt);
             }
