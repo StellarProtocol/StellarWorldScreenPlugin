@@ -29,6 +29,7 @@ namespace Stellar.WorldScreen.Screen
         // crashes. _pcmScratch bridges the interop Il2CppStructArray<float> to AudioSink's float[] API.
         private AudioClip.PCMReaderCallback? _pcmCallback;
         private float[] _pcmScratch = System.Array.Empty<float>();
+        private long _pcmCallbacks; // diagnostic: how many times Unity's audio thread pulled a chunk
 
         // World width of the screen in metres; height follows the frame aspect. Tunable in Milestone C.
         private float _widthMetres = 3f;
@@ -98,12 +99,22 @@ namespace Stellar.WorldScreen.Screen
         // the interop array through a same-length reusable scratch so AudioSink stays pure BCL (float[] only).
         private void OnPcmRead(Il2CppStructArray<float> data)
         {
+            _pcmCallbacks++;
             if (_audio == null) return;
             int n = data.Length;
             if (n <= 0) return;
             if (_pcmScratch.Length != n) _pcmScratch = new float[n];
             _audio.ReadInto(_pcmScratch);
             for (int i = 0; i < n; i++) data[i] = _pcmScratch[i];
+        }
+
+        /// <summary>One-line audio state for the diagnostic log (proves which pipeline boundary is failing).</summary>
+        public string AudioDiag()
+        {
+            bool playing = _audioSource != null && _audioSource.isPlaying;
+            float spatial = _audioSource != null ? _audioSource.spatialBlend : -1f;
+            long submitted = _audio != null ? _audio.SubmittedSamples : -1;
+            return $"src={_audioSource != null} playing={playing} spatial={spatial} callbacks={_pcmCallbacks} submitted={submitted}";
         }
 
         /// <summary>Uploads a raw RGBA32 frame (length ≥ w*h*4) into the screen texture. Main thread only.</summary>

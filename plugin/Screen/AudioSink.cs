@@ -16,6 +16,9 @@ namespace Stellar.WorldScreen.Screen
         private int _read;
         private int _count;
 
+        /// <summary>Total samples ever accepted (dropped-on-overrun excluded). Diagnostic: proves wire flow.</summary>
+        public long SubmittedSamples { get; private set; }
+
         /// <param name="capacitySamples">Ring size in samples (interleaved). Default ≈ 1s of 48k stereo.</param>
         public AudioSink(int capacitySamples = 48000 * 2)
         {
@@ -34,6 +37,7 @@ namespace Stellar.WorldScreen.Screen
                     short s = (short)(s16le[i * 2] | (s16le[i * 2 + 1] << 8));
                     _ring[(_read + _count) % _ring.Length] = s / 32768f;
                     _count++;
+                    SubmittedSamples++;
                 }
             }
         }

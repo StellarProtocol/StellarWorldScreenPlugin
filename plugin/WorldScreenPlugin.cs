@@ -31,6 +31,9 @@ namespace Stellar.WorldScreen
 
         private Action<float>? _update;
         private bool _placed;
+        private GameObject? _listenerObj;   // our Unity AudioListener (the game's audio is Wwise → it ships none)
+        private bool _listenerChecked;
+        private float _audioDiagTimer;
 
         // Render-quality presets (label, width, height); the index is the overlay dropdown selection.
         private static readonly (string Label, int W, int H)[] Qualities =
@@ -172,6 +175,53 @@ namespace Stellar.WorldScreen
 
             if (!_placed && _screen.Exists && IsInWorld())
                 PlaceScreen();
+
+            if (_placed)
+            {
+                EnsureAudioListener();
+                PumpAudioDiag(dt);
+            }
+        }
+
+        // The game routes audio through Wwise, which ships no Unity AudioListener — so a Unity AudioSource is
+        // inaudible. Provide one (following the camera, at the player's ears) unless the game already has one.
+        private void EnsureAudioListener()
+        {
+            if (!_listenerChecked)
+            {
+                _listenerChecked = true;
+                if (UnityEngine.Object.FindObjectOfType<AudioListener>() != null)
+                {
+                    _log.Info("[WorldScreen] Unity AudioListener already present — using it");
+                }
+                else
+                {
+                    _listenerObj = new GameObject("StellarAudioListener");
+                    UnityEngine.Object.DontDestroyOnLoad(_listenerObj);
+                    _listenerObj.AddComponent<AudioListener>();
+                    _log.Info("[WorldScreen] no Unity AudioListener (Wwise game) — added our own");
+                }
+            }
+            if (_listenerObj == null) return;
+            var cam = GetActiveCamera();
+            if (cam != null)
+                _listenerObj.transform.SetPositionAndRotation(cam.transform.position, cam.transform.rotation);
+            else
+            {
+                var p = _services.PlayerState.Position;
+                _listenerObj.transform.position = new Vector3(p.X, p.Y + 1.6f, p.Z);
+            }
+        }
+
+        // Every ~3s, log where the audio pipeline stands so a still-silent build tells us the failing boundary:
+        // dspTime advancing => Unity audio DSP alive; submitted>0 => wire delivering PCM; callbacks>0 => Unity
+        // pulling from our clip. All three up but silent => a listener/routing problem, not a data problem.
+        private void PumpAudioDiag(float dt)
+        {
+            _audioDiagTimer += dt;
+            if (_audioDiagTimer < 3f) return;
+            _audioDiagTimer = 0f;
+            _log.Info($"[WorldScreen][audio] dspTime={AudioSettings.dspTime:F2} ownListener={_listenerObj != null} {_screen.AudioDiag()}");
         }
 
         private void PlaceScreen()
