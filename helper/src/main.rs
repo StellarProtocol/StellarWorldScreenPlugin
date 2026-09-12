@@ -51,11 +51,11 @@ async fn main() -> anyhow::Result<()> {
         other if other.starts_with("file:") => {
             let path = other["file:".len()..].to_string();
             let ffmpeg_path = resolve_ffmpeg_path(args.ffmpeg.as_deref())?;
-            // A file carries its own audio, decoded by a second ffmpeg from the same file.
-            let audio_out = Some((ffmpeg_path.clone(), path.clone()));
+            // A file carries its own audio: the same single ffmpeg maps it (-map 0:a).
             let source = FfmpegSource::spawn(
-                FfmpegInput::File(path), args.width, args.height, DEFAULT_FPS, ffmpeg_path, audio_out, gain,
-            )?;
+                FfmpegInput::File(path.clone()), args.width, args.height, DEFAULT_FPS, ffmpeg_path,
+                Some(path), gain,
+            ).await?;
             server::serve(args.listen, source, control_tx).await
         }
         other if other.starts_with("url:") => {
@@ -78,16 +78,15 @@ async fn main() -> anyhow::Result<()> {
                 );
                 (video, audio)
             };
-            let audio_out = audio_input.map(|inp| (ffmpeg_path.clone(), inp));
             let source = FfmpegSource::spawn(
                 FfmpegInput::Url(video_url),
                 args.width,
                 args.height,
                 DEFAULT_FPS,
                 ffmpeg_path,
-                audio_out,
+                audio_input,
                 gain,
-            )?;
+            ).await?;
             server::serve(args.listen, source, control_tx).await
         }
         other => anyhow::bail!("unknown --source '{other}' (expected: testpattern, file:<path>, url:<u>)"),

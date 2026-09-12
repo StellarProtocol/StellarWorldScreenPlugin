@@ -9,6 +9,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 /// Reads exactly one `w*h*4`-byte RGBA frame from `r` into `buf` (resized to that length; the same
@@ -90,72 +91,89 @@ pub struct FfmpegSource {
     title: String,
     pts_ms: u64,
     buf: Vec<u8>,
-    /// Audio-decode ffmpeg process (input's audio → PCM); kept alive for `kill_on_drop`. Never read.
-    #[allow(dead_code)]
-    audio_child: Option<Child>,
     /// Local `ffplay` playback process fed the decoded PCM (with distance-gain applied). Kept alive for
     /// `kill_on_drop`; never read. The game's own audio is Wwise, so a Unity AudioSource in the plugin is
     /// silent — playback happens HERE, in the helper's Proton process, exactly as the game's audio does.
+    /// The PCM comes from the SAME ffmpeg (`child`) that produces the video, so audio and video share one
+    /// clock and cannot drift apart — audio is the master, video is paced to it.
     #[allow(dead_code)]
     ffplay_child: Option<Child>,
 }
 
 impl FfmpegSource {
-    /// Spawns `ffmpeg_path` to decode `input` at `w`x`h`/`fps`, piping raw RGBA frames on stdout:
-    /// `ffmpeg.exe -hide_banner -loglevel error -re -i <INPUT> -an -vf scale=W:H,fps=FPS -f rawvideo
-    /// -pix_fmt rgba pipe:1`. `-re` paces ffmpeg's own output at realtime rate, so the blocking
-    /// stdout read in `next_frame` paces playback with no manual sleep needed.
-    pub fn spawn(
+    /// Spawns ONE `ffmpeg_path` that decodes `input` at `w`x`h`/`fps` and produces BOTH streams from a
+    /// single timeline: raw RGBA video on stdout (`pipe:1`, read by `next_frame`), and — when `audio_input`
+    /// is set — S16LE 48kHz stereo PCM to a localhost TCP the helper reads, gains, and pipes to `ffplay`.
+    /// One process = one clock for audio+video, so the picture can't drift from the sound. `-re` paces the
+    /// whole thing at realtime; if a machine can't keep up, both streams slow together and stay in sync.
+    ///
+    /// `audio_input`: the audio source. For a file it's the file path (same as the video input → one input,
+    /// `-map 0:a`); for a URL it's a separately-resolved audio-stream URL (a second input → `-map 1:a`).
+    /// `None` → silent. `gain` is the live playback gain in [0,1] (f32 bits) driven by CONTROL Volume.
+    pub async fn spawn(
         input: FfmpegInput,
         w: u16,
         h: u16,
         fps: u8,
         ffmpeg_path: PathBuf,
-        // (ffmpeg path, audio input) — the audio input to decode+play for sound. For a file it's the file
-        // path; for a URL it's a SEPARATELY-resolved audio-stream URL (many YouTube videos have no combined
-        // format, so the video URL is silent). None → silent video.
-        audio_out: Option<(PathBuf, String)>,
-        // Live playback gain in [0,1] as f32 bits, driven by the plugin's CONTROL Volume (distance-based).
+        audio_input: Option<String>,
         gain: Arc<AtomicU32>,
     ) -> anyhow::Result<Self> {
         let title = derive_title(&input);
-        let input_value: &str = match &input {
+        let video_input: &str = match &input {
             FfmpegInput::File(p) => p,
             FfmpegInput::Url(u) => u,
         };
+        let is_file = matches!(input, FfmpegInput::File(_));
         let vf = format!("scale={w}:{h},fps={fps}");
+
+        // When there's audio, bind a localhost listener the ONE ffmpeg streams PCM to (audio is a separate
+        // *transport* but the same *process/clock* as the video). Audio from a different source than the
+        // video (URL case) becomes ffmpeg's 2nd input; a file's audio is the same input (-map 0:a).
+        let audio_second_input = matches!(&audio_input, Some(a) if a.as_str() != video_input);
+        let audio_port = match &audio_input {
+            Some(_) => Some(
+                TcpListener::bind(("127.0.0.1", 0)).await.context("bind audio listener")?,
+            ),
+            None => None,
+        };
 
         let mut cmd = Command::new(&ffmpeg_path);
         cmd.arg("-hide_banner").arg("-loglevel").arg("error");
-        if matches!(input, FfmpegInput::File(_)) {
-            // Loop local files forever so the screen never goes dark when a clip ends: without this,
-            // EOF ends the source → the helper exits → the plugin reconnects to a dead helper.
+        if is_file {
+            // Loop local files forever (both A+V together) so the screen never goes dark at EOF.
             cmd.arg("-stream_loop").arg("-1");
         }
-        cmd.arg("-re")
-            .arg("-i")
-            .arg(input_value)
-            .arg("-an")
-            .arg("-vf")
-            .arg(&vf)
-            .arg("-f")
-            .arg("rawvideo")
-            .arg("-pix_fmt")
-            .arg("rgba")
-            .arg("pipe:1")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
+        cmd.arg("-re").arg("-i").arg(video_input);
+        if audio_second_input {
+            cmd.arg("-re").arg("-i").arg(audio_input.as_deref().unwrap());
+        }
+        // Video → stdout.
+        cmd.arg("-map").arg("0:v")
+            .arg("-vf").arg(&vf)
+            .arg("-f").arg("rawvideo")
+            .arg("-pix_fmt").arg("rgba")
+            .arg("pipe:1");
+        // Audio → localhost TCP (helper → gain → ffplay). ffmpeg accepts `-ac` (unlike ffplay).
+        if let Some(listener) = &audio_port {
+            let port = listener.local_addr().context("audio listener addr")?.port();
+            let amap = if audio_second_input { "1:a" } else { "0:a" };
+            cmd.arg("-map").arg(amap)
+                .arg("-ac").arg("2")
+                .arg("-ar").arg("48000")
+                .arg("-f").arg("s16le")
+                .arg(format!("tcp://127.0.0.1:{port}"));
+        }
+        cmd.stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
 
         let mut child = cmd
             .spawn()
             .with_context(|| format!("spawn ffmpeg at {}", ffmpeg_path.display()))?;
         let stdout = child.stdout.take().context("ffmpeg child produced no stdout pipe")?;
 
-        let is_file = matches!(input, FfmpegInput::File(_));
-        let (audio_child, ffplay_child) = match audio_out {
-            Some((ffmpeg, inp)) => setup_local_audio(ffmpeg, &inp, is_file, gain),
-            None => (None, None),
+        let ffplay_child = match audio_port {
+            Some(listener) => start_audio_playback(listener, ffmpeg_path.with_file_name("ffplay.exe"), gain),
+            None => None,
         };
 
         Ok(Self {
@@ -167,35 +185,36 @@ impl FfmpegSource {
             title,
             pts_ms: 0,
             buf: vec![0u8; w as usize * h as usize * 4],
-            audio_child,
             ffplay_child,
         })
     }
 }
 
-/// Wires local audio playback: decode the input's audio to PCM, then pump it (with `gain` applied) into
-/// an `ffplay` reading from stdin. Returns the two child processes to keep alive for `kill_on_drop`.
-/// Best-effort — any failure leaves the video playing silently rather than aborting the whole session.
-fn setup_local_audio(
-    ffmpeg_path: PathBuf,
-    input: &str,
-    is_file: bool,
-    gain: Arc<AtomicU32>,
-) -> (Option<Child>, Option<Child>) {
-    let (audio_child, pcm) = match spawn_audio_ffmpeg(ffmpeg_path.clone(), input, is_file) {
-        Some(v) => v,
-        None => return (None, None),
-    };
-    // ffplay is deployed as a sibling of ffmpeg.exe (see deploy.sh).
-    let ffplay_path = ffmpeg_path.with_file_name("ffplay.exe");
+/// Accepts the ffmpeg audio connection on `listener` and plays it: reads S16LE PCM, applies the live
+/// `gain`, and pipes it to `ffplay`. Returns the ffplay child (kept alive for `kill_on_drop`). If ffplay
+/// can't start, the audio is still DRAINED so ffmpeg never blocks on the audio output (which, being the
+/// same process, would also stall the video). Best-effort: on any audio failure the video plays silent.
+fn start_audio_playback(listener: TcpListener, ffplay_path: PathBuf, gain: Arc<AtomicU32>) -> Option<Child> {
     match spawn_ffplay(&ffplay_path) {
         Some((ffplay_child, stdin)) => {
-            tokio::spawn(pump_audio_to_ffplay(pcm, stdin, gain));
-            (Some(audio_child), Some(ffplay_child))
+            tokio::spawn(async move {
+                match listener.accept().await {
+                    Ok((stream, _)) => pump_audio_to_ffplay(stream, stdin, gain).await,
+                    Err(e) => eprintln!("[audio] accept failed: {e}"),
+                }
+            });
+            Some(ffplay_child)
         }
         None => {
             eprintln!("[audio] ffplay unavailable at {} — playing silent", ffplay_path.display());
-            (Some(audio_child), None)
+            tokio::spawn(async move {
+                // Drain so the shared ffmpeg isn't blocked on its audio output (which would stall video).
+                if let Ok((mut stream, _)) = listener.accept().await {
+                    let mut buf = vec![0u8; 8192];
+                    while matches!(stream.read(&mut buf).await, Ok(n) if n > 0) {}
+                }
+            });
+            None
         }
     }
 }
@@ -237,13 +256,13 @@ fn spawn_ffplay(ffplay_path: &Path) -> Option<(Child, ChildStdin)> {
     }
 }
 
-/// Copies decoded PCM from `pcm` (the audio ffmpeg's stdout) to `sink` (ffplay's stdin), scaling each
-/// S16 sample by the current `gain` in [0,1] so the plugin's distance-based Volume attenuates playback in
-/// real time. Ends (dropping `sink`, so ffplay sees EOF and exits) on read/write EOF or error.
-async fn pump_audio_to_ffplay(mut pcm: ChildStdout, mut sink: ChildStdin, gain: Arc<AtomicU32>) {
+/// Copies S16LE PCM from `src` (the ffmpeg audio TCP stream) to `sink` (ffplay's stdin), scaling each
+/// sample by the current `gain` in [0,1] so the plugin's distance-based Volume attenuates playback in real
+/// time. Ends (dropping `sink`, so ffplay sees EOF and exits) on read/write EOF or error.
+async fn pump_audio_to_ffplay<R: AsyncRead + Unpin>(mut src: R, mut sink: ChildStdin, gain: Arc<AtomicU32>) {
     let mut buf = vec![0u8; 8192];
     loop {
-        match pcm.read(&mut buf).await {
+        match src.read(&mut buf).await {
             Ok(0) | Err(_) => break, // decode ended/failed — stop feeding; ffplay gets EOF and exits
             Ok(n) => {
                 let g = f32::from_bits(gain.load(Ordering::Relaxed));
@@ -267,43 +286,6 @@ fn apply_gain_s16le(bytes: &mut [u8], gain: f32) {
         let b = scaled.to_le_bytes();
         bytes[i * 2] = b[0];
         bytes[i * 2 + 1] = b[1];
-    }
-}
-
-/// Spawns an ffmpeg that decodes the input's audio to raw interleaved S16LE PCM at 48000 Hz, 2 channels
-/// on stdout, which the local `pump_audio_to_ffplay` then plays through `ffplay`. `-re` paces it at
-/// realtime so it stays in step with the `-re`-paced video; local files loop (`-stream_loop -1`) to
-/// match the looping video. Best-effort: returns `None` on spawn failure (video plays silent).
-fn spawn_audio_ffmpeg(ffmpeg_path: PathBuf, input: &str, is_file: bool) -> Option<(Child, ChildStdout)> {
-    let mut cmd = Command::new(&ffmpeg_path);
-    cmd.arg("-hide_banner").arg("-loglevel").arg("error");
-    if is_file {
-        cmd.arg("-stream_loop").arg("-1");
-    }
-    cmd.arg("-re")
-        .arg("-i")
-        .arg(input)
-        .arg("-vn")
-        .arg("-f")
-        .arg("s16le")
-        .arg("-ar")
-        .arg("48000")
-        .arg("-ac")
-        .arg("2")
-        .arg("pipe:1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    match cmd.spawn() {
-        Ok(mut child) => {
-            let stdout = child.stdout.take()?;
-            Some((child, stdout))
-        }
-        Err(e) => {
-            eprintln!("[ffmpeg source] audio decode failed to start: {e}");
-            None
-        }
     }
 }
 
@@ -451,6 +433,7 @@ mod fake_ffmpeg_tests {
             None,
             gain,
         )
+        .await
         .expect("spawn fake ffmpeg");
 
         for i in 0..3u64 {
