@@ -65,14 +65,21 @@ namespace Stellar.WorldScreen.Net
             EnsureRunning(exePath, args);
         }
 
-        /// <summary>Kills the launched helper if it is still alive. Idempotent.</summary>
+        /// <summary>Kills the launched helper AND its whole process tree if it is still alive. Idempotent.
+        /// The tree kill is essential: the helper spawns ffmpeg/ffplay children, and ffplay (audio) does
+        /// NOT self-terminate when the helper dies (no pipe to notice) — a plain Kill() would orphan it and
+        /// leave audio playing forever. <c>Kill(true)</c> takes the whole tree; a plain Kill() is the fallback
+        /// if the tree kill isn't supported.</summary>
         public void Stop()
         {
             try
             {
-                if (_proc != null && !_proc.HasExited) _proc.Kill();
+                if (_proc != null && !_proc.HasExited) _proc.Kill(entireProcessTree: true);
             }
-            catch (Exception) { /* already gone */ }
+            catch (Exception)
+            {
+                try { if (_proc != null && !_proc.HasExited) _proc.Kill(); } catch (Exception) { }
+            }
             try { _proc?.Dispose(); } catch (Exception) { }
             _proc = null;
         }
