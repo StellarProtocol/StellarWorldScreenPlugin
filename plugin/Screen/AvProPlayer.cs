@@ -74,6 +74,21 @@ namespace Stellar.WorldScreen.Screen
             if (c.IsPlaying()) c.Pause(); else c.Play();
         }
 
+        /// <summary>Current playback position in seconds (0 if not ready).</summary>
+        public double CurrentTime => (_mp != null && _mp.Control != null) ? _mp.Control.GetCurrentTime() : 0.0;
+
+        /// <summary>Media duration in seconds (0 if unknown/not ready).</summary>
+        public double Duration => (_mp != null && _mp.Info != null) ? _mp.Info.GetDuration() : 0.0;
+
+        /// <summary>Seeks to <paramref name="seconds"/>.</summary>
+        public void Seek(double seconds) { _mp?.Control?.Seek(seconds); }
+
+        /// <summary>True while audio is muted.</summary>
+        public bool IsMuted => _mp != null && _mp.Control != null && _mp.Control.IsMuted();
+
+        /// <summary>Toggles mute.</summary>
+        public void ToggleMute() { var c = _mp?.Control; if (c != null) c.MuteAudio(!c.IsMuted()); }
+
         /// <summary>Stops playback and destroys the player.</summary>
         public void Destroy()
         {

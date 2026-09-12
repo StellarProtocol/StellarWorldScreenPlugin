@@ -82,11 +82,7 @@ namespace Stellar.WorldScreen
                 isPlaying: () => _avpro.IsPlaying,
                 togglePause: () => _avpro.TogglePause(),
                 stop: () => LoadSource("testpattern"));
-            _fullscreen.Bind(
-                isPlaying: () => _avpro.IsPlaying,
-                togglePause: () => _avpro.TogglePause(),
-                stop: () => LoadSource("testpattern"),
-                exit: () => _fullscreen.Hide());
+            _fullscreen.Bind(_avpro, onStop: () => LoadSource("testpattern"));
 
             // HelperClient events fire on its background thread — marshal to Unity's main thread.
             _client.OnConnected += () => _services.Framework.Post(() =>
@@ -305,9 +301,13 @@ namespace Stellar.WorldScreen
                 if (_fullscreen.Visible)
                 {
                     _fullscreen.SetTexture(tex, w, h);
+                    _fullscreen.Tick(dt);
                     if (Input.GetKeyDown(KeyCode.Escape)) _fullscreen.Hide(); // always-available exit fallback
                 }
-                PumpVolume(dt);
+                else
+                {
+                    PumpVolume(dt); // distance volume only when NOT full-screen (full-screen = full volume + mute)
+                }
             }
         }
 
@@ -317,6 +317,8 @@ namespace Stellar.WorldScreen
             _fullscreen.Toggle();
             if (_fullscreen.Visible)
             {
+                _avpro.SetVolume(1f); // full volume while watching in full-screen (bar has a mute toggle)
+                _lastVolume = -1;     // force distance-volume to re-apply after exit
                 var tex = _avpro.CurrentTexture();
                 if (tex != null)
                 {
