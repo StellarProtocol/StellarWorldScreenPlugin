@@ -11,7 +11,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 use stellar_castbox::server;
 use stellar_castbox::source::ffmpeg::{FfmpegInput, FfmpegSource};
-use stellar_castbox::source::resolve::{is_direct_media_url, resolve_via_ytdlp, scheme_and_host};
+use stellar_castbox::source::resolve::{
+    is_direct_media_url, resolve_via_ytdlp, scheme_and_host, YTDLP_AUDIO_SELECTOR, YTDLP_VIDEO_SELECTOR,
+};
 use stellar_castbox::source::testpattern::TestPattern;
 use stellar_castbox::wire::Control;
 
@@ -40,35 +42,44 @@ async fn main() -> anyhow::Result<()> {
         other if other.starts_with("file:") => {
             let path = other["file:".len()..].to_string();
             let ffmpeg_path = resolve_ffmpeg_path(args.ffmpeg.as_deref())?;
-            let ffplay_path = resolve_ffplay_path(args.ffplay.as_deref());
+            // A file carries its own audio, so ffplay plays the same file.
+            let audio_out = resolve_ffplay_path(args.ffplay.as_deref()).map(|pp| (pp, path.clone()));
             let source = FfmpegSource::spawn(
-                FfmpegInput::File(path), DEFAULT_W, DEFAULT_H, DEFAULT_FPS, ffmpeg_path, ffplay_path,
+                FfmpegInput::File(path), DEFAULT_W, DEFAULT_H, DEFAULT_FPS, ffmpeg_path, audio_out,
             )?;
             server::serve(args.listen, source, control_tx).await
         }
         other if other.starts_with("url:") => {
             let raw_url = other["url:".len()..].to_string();
             let ffmpeg_path = resolve_ffmpeg_path(args.ffmpeg.as_deref())?;
-            let direct_url = if is_direct_media_url(&raw_url) {
-                raw_url
+            let (video_url, audio_input) = if is_direct_media_url(&raw_url) {
+                // a direct media URL (mp4/HLS) carries its own audio — ffmpeg + ffplay both use it.
+                (raw_url.clone(), Some(raw_url))
             } else {
+                // page URL: resolve a low-res H.264 VIDEO stream for ffmpeg and, separately, the best
+                // AUDIO stream for ffplay (many YouTube videos have no combined format).
                 let ytdlp_path = resolve_ytdlp_path(args.ytdlp.as_deref())?;
-                let resolved = resolve_via_ytdlp(&raw_url, &ytdlp_path).await?;
+                let video = resolve_via_ytdlp(&raw_url, &ytdlp_path, YTDLP_VIDEO_SELECTOR).await?;
+                let audio = resolve_via_ytdlp(&raw_url, &ytdlp_path, YTDLP_AUDIO_SELECTOR).await.ok();
                 eprintln!(
-                    "[resolve] yt-dlp {} -> {}",
+                    "[resolve] yt-dlp {} -> video {} ({})",
                     scheme_and_host(&raw_url),
-                    scheme_and_host(&resolved)
+                    scheme_and_host(&video),
+                    if audio.is_some() { "with audio" } else { "no audio" }
                 );
-                resolved
+                (video, audio)
             };
-            let ffplay_path = resolve_ffplay_path(args.ffplay.as_deref());
+            let audio_out = match (resolve_ffplay_path(args.ffplay.as_deref()), audio_input) {
+                (Some(ffplay), Some(inp)) => Some((ffplay, inp)),
+                _ => None,
+            };
             let source = FfmpegSource::spawn(
-                FfmpegInput::Url(direct_url),
+                FfmpegInput::Url(video_url),
                 DEFAULT_W,
                 DEFAULT_H,
                 DEFAULT_FPS,
                 ffmpeg_path,
-                ffplay_path,
+                audio_out,
             )?;
             server::serve(args.listen, source, control_tx).await
         }

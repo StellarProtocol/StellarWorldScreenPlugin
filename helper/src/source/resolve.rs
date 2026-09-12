@@ -43,27 +43,28 @@ pub fn scheme_and_host(u: &str) -> String {
     }
 }
 
-/// The yt-dlp format selector used for every resolve: prefer a combined (video+audio) stream at
-/// ≤720p, else best video-only at ≤720p, else best combined, else best video-only — always exactly
-/// one direct URL back. `FfmpegSource` decodes with `-an` (audio dropped) and scales to 640x360, so
-/// a video-only URL is fine. Plain `-f b` was tried first and rejected: it fails with "Requested
-/// format is not available" on many real YouTube videos (verified under Wine); this selector was
-/// confirmed to resolve a real YouTube URL to a single direct googlevideo URL. Pinned by
-/// `fake_ytdlp_tests::success_returns_first_stdout_line_and_invokes_expected_argv` — do not change
-/// without re-verifying under Wine.
-const YTDLP_FORMAT_SELECTOR: &str = "b[height<=?720]/bv[height<=?720]/b/bv";
+/// VIDEO format selector: prefer cheap-to-decode H.264 (avc1) at ≤480p — we downscale every source to
+/// 640×360 anyway, so pulling a heavy av01/4K stream only causes playback lag for no visual gain. Falls
+/// back to a combined ≤480, any video ≤480, best combined, best video. `FfmpegSource` decodes with `-an`
+/// (audio is played separately via ffplay), so a video-only URL is fine.
+pub const YTDLP_VIDEO_SELECTOR: &str = "bv*[height<=?480][vcodec^=avc1]/b[height<=?480]/bv*[height<=?480]/b/bv*";
 
-/// Runs the bundled `yt-dlp.exe` to resolve a page URL (e.g. a YouTube watch link) to a single
-/// direct stream URL ffmpeg can decode: `yt-dlp.exe -g -f "<selector>" --no-playlist
-/// --no-warnings <url>`. `-g` prints the resolved URL to stdout instead of downloading;
-/// `--no-playlist` guarantees exactly one video's URL even when `url` also matches a playlist.
-/// Returns the first non-empty trimmed stdout line, or an `Err` (including a short slice of
-/// stderr) on a non-zero exit or empty stdout.
-pub async fn resolve_via_ytdlp(url: &str, ytdlp_path: &Path) -> anyhow::Result<String> {
+/// AUDIO format selector (for ffplay): best audio-only stream (opus/aac), else best combined (carries
+/// audio). Many YouTube videos have NO combined format, so the video selector above returns a video-only
+/// URL — the audio must be resolved and played separately for sound.
+pub const YTDLP_AUDIO_SELECTOR: &str = "ba/b";
+
+/// Runs the bundled `yt-dlp.exe` to resolve a page URL (e.g. a YouTube watch link) to a single direct
+/// stream URL for the given `format` selector: `yt-dlp.exe -g -f "<format>" --no-playlist --no-warnings
+/// <url>`. `-g` prints the resolved URL to stdout instead of downloading; `--no-playlist` guarantees
+/// exactly one video's URL. Returns the first non-empty trimmed stdout line, or an `Err` (including a
+/// short slice of stderr) on a non-zero exit or empty stdout. (`-f b` alone was rejected — it fails with
+/// "Requested format is not available" on many real YouTube videos, verified under Wine.)
+pub async fn resolve_via_ytdlp(url: &str, ytdlp_path: &Path, format: &str) -> anyhow::Result<String> {
     let output = Command::new(ytdlp_path)
         .arg("-g")
         .arg("-f")
-        .arg(YTDLP_FORMAT_SELECTOR)
+        .arg(format)
         .arg("--no-playlist")
         .arg("--no-warnings")
         .arg(url)
@@ -260,9 +261,10 @@ mod fake_ytdlp_tests {
     async fn resolve_via_ytdlp_tolerating_sandbox_etxtbsy(
         url: &str,
         ytdlp_path: &std::path::Path,
+        format: &str,
     ) -> anyhow::Result<String> {
         for attempt in 0..10 {
-            match resolve_via_ytdlp(url, ytdlp_path).await {
+            match resolve_via_ytdlp(url, ytdlp_path, format).await {
                 Ok(v) => return Ok(v),
                 // `anyhow::Error`'s `Display`/`to_string()` shows only the outer "spawn yt-dlp at
                 // ..." context, not the wrapped io::Error — check the whole cause chain instead, or
@@ -282,7 +284,8 @@ mod fake_ytdlp_tests {
             .join(format!("stellar-castbox-fake-ytdlp-argv-{}.txt", std::process::id()));
         let fake = write_fake_ytdlp_ok("ok", &capture, "https://cdn.example.com/direct.mp4");
 
-        let resolved = resolve_via_ytdlp_tolerating_sandbox_etxtbsy("https://youtube.com/watch?v=abc", &fake)
+        let resolved = resolve_via_ytdlp_tolerating_sandbox_etxtbsy(
+            "https://youtube.com/watch?v=abc", &fake, YTDLP_VIDEO_SELECTOR)
             .await
             .expect("fake yt-dlp should resolve");
         assert_eq!(resolved, "https://cdn.example.com/direct.mp4");
@@ -290,7 +293,7 @@ mod fake_ytdlp_tests {
         let argv = std::fs::read_to_string(&capture).expect("read captured argv");
         assert_eq!(
             argv.trim(),
-            "-g -f b[height<=?720]/bv[height<=?720]/b/bv --no-playlist --no-warnings https://youtube.com/watch?v=abc",
+            "-g -f bv*[height<=?480][vcodec^=avc1]/b[height<=?480]/bv*[height<=?480]/b/bv* --no-playlist --no-warnings https://youtube.com/watch?v=abc",
             "yt-dlp argv is a pinned contract — do not change without re-verifying under Wine"
         );
 
@@ -302,7 +305,8 @@ mod fake_ytdlp_tests {
     async fn nonzero_exit_returns_error_containing_stderr_slice() {
         let fake = write_fake_ytdlp_fail("fail", "ERROR: ffmpeg exited with an error");
 
-        let err = resolve_via_ytdlp_tolerating_sandbox_etxtbsy("https://youtube.com/watch?v=dead", &fake)
+        let err = resolve_via_ytdlp_tolerating_sandbox_etxtbsy(
+            "https://youtube.com/watch?v=dead", &fake, YTDLP_VIDEO_SELECTOR)
             .await
             .expect_err("non-zero exit must be an error");
         assert!(
@@ -317,7 +321,8 @@ mod fake_ytdlp_tests {
     async fn empty_stdout_on_success_is_an_error() {
         let fake = write_fake_ytdlp_empty_stdout("empty");
 
-        let err = resolve_via_ytdlp_tolerating_sandbox_etxtbsy("https://youtube.com/watch?v=blank", &fake)
+        let err = resolve_via_ytdlp_tolerating_sandbox_etxtbsy(
+            "https://youtube.com/watch?v=blank", &fake, YTDLP_VIDEO_SELECTOR)
             .await
             .expect_err("empty stdout must be an error even on exit 0");
         assert!(err.to_string().contains("no URL"), "unexpected error: {err}");

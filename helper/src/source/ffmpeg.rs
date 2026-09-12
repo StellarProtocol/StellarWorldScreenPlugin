@@ -104,7 +104,10 @@ impl FfmpegSource {
         h: u16,
         fps: u8,
         ffmpeg_path: PathBuf,
-        ffplay_path: Option<PathBuf>,
+        // (ffplay path, audio input) — the input ffplay plays for sound. For a file it's the file path;
+        // for a URL it's a SEPARATELY-resolved audio-stream URL (many YouTube videos have no combined
+        // format, so the video URL is silent). None → silent video.
+        audio_out: Option<(PathBuf, String)>,
     ) -> anyhow::Result<Self> {
         let title = derive_title(&input);
         let input_value: &str = match &input {
@@ -140,8 +143,8 @@ impl FfmpegSource {
             .with_context(|| format!("spawn ffmpeg at {}", ffmpeg_path.display()))?;
         let stdout = child.stdout.take().context("ffmpeg child produced no stdout pipe")?;
 
-        let audio = ffplay_path
-            .and_then(|pp| spawn_audio(pp, input_value, matches!(input, FfmpegInput::File(_))));
+        let audio = audio_out
+            .and_then(|(ffplay, inp)| spawn_audio(ffplay, &inp, matches!(input, FfmpegInput::File(_))));
 
         Ok(Self {
             child,
