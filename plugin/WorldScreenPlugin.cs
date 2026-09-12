@@ -23,12 +23,13 @@ namespace Stellar.WorldScreen
         private const float MinAudioDist = 3f;
         private const float MaxAudioDist = 40f;
 
-        // SPIKE: drive playback through the game's AVPro engine (HW decode + internal A/V sync) instead of
-        // the raw-frame wire pipeline. When true, the helper is not launched; a bundled test clip is played
-        // via AVPro to verify smooth video + working System-path audio in-game before the full switch.
+        // Playback runs through the game's AVPro engine (HW decode + internal A/V sync) instead of the
+        // raw-frame wire pipeline. The helper is not launched; yt-dlp resolves page URLs to a direct URL
+        // AVPro can open. Kept as a flag so the old wire path can be restored by flipping it to false.
         private const bool UseAvPro = true;
         private readonly Screen.AvProPlayer _avpro = new();
-        private bool _avproOpened;
+        private readonly Net.YtDlpResolver _resolver;
+        private bool _avproInitDone;
 
         private readonly IPluginServices _services;
         private readonly IPluginLog _log;
@@ -62,6 +63,8 @@ namespace Stellar.WorldScreen
             _log = services.Log;
             _launcher = new HelperLauncher(_log.Info);
             _client = new HelperClient(_sink);
+            var slotDir = System.IO.Path.GetDirectoryName(_exePath) ?? ".";
+            _resolver = new Net.YtDlpResolver(System.IO.Path.Combine(slotDir, "yt-dlp.exe"), slotDir);
             _overlay = new UI.OverlayPanel(services, LoadSource, HandleControl, QualityLabels(), () => _quality, SetQuality);
 
             // HelperClient events fire on its background thread — marshal to Unity's main thread.
@@ -105,8 +108,58 @@ namespace Stellar.WorldScreen
             _currentSource = sourceSpec;
             _log.Info($"[WorldScreen] loading source: {RedactSource(sourceSpec)}");
             _overlay.SetStatus("Loading…");
-            _lastVolume = -1; // force a volume resend once the relaunched helper reconnects
-            _launcher.Restart(_exePath, BuildArgs(sourceSpec));
+            _lastVolume = -1; // force a volume re-apply for the new source
+
+            if (!UseAvPro)
+            {
+                _launcher.Restart(_exePath, BuildArgs(sourceSpec));
+                return;
+            }
+
+            // AVPro: open a file/direct-URL immediately; resolve a page URL (YouTube) via yt-dlp first.
+            if (sourceSpec.StartsWith("file:", StringComparison.Ordinal)) { OpenAvPro(sourceSpec.Substring(5)); return; }
+            if (sourceSpec == "testpattern") { OpenAvPro(TestClipPath()); return; }
+            if (sourceSpec.StartsWith("url:", StringComparison.Ordinal))
+            {
+                var url = sourceSpec.Substring(4);
+                if (IsDirectMedia(url)) { OpenAvPro(url); return; }
+                if (!_resolver.Available) { _overlay.SetStatus("yt-dlp missing"); return; }
+                // YouTube has no combined format and AVPro plays one source, so download+mux to a local mp4.
+                _overlay.SetStatus("Downloading…");
+                var selector = Net.YtDlpResolver.SelectorForHeight(Qualities[_quality].H);
+                var outPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(_exePath) ?? ".", "ytcache.mp4");
+                _resolver.DownloadAsync(url, selector, outPath, ok => _services.Framework.Post(() =>
+                {
+                    if (sourceSpec != _currentSource) return; // a newer Load superseded this one
+                    if (!ok) { _overlay.SetStatus("Download failed"); return; }
+                    OpenAvPro(outPath);
+                }));
+            }
+        }
+
+        // Opens a file path or direct URL in AVPro (main thread) and reports status.
+        private void OpenAvPro(string pathOrUrl)
+        {
+            _avpro.EnsureCreated();
+            var ok = _avpro.Open(pathOrUrl);
+            _log.Info($"[WorldScreen] AVPro Open -> {ok}");
+            _overlay.SetStatus(ok ? "Playing…" : "Open failed");
+        }
+
+        // A URL is "direct media" if its path ends in a container extension AVPro can open itself; otherwise
+        // it's a page URL (YouTube etc.) that yt-dlp must resolve to a direct stream first.
+        private static bool IsDirectMedia(string url)
+        {
+            var path = url.Split('?', '#')[0].ToLowerInvariant();
+            return path.EndsWith(".mp4") || path.EndsWith(".webm") || path.EndsWith(".mkv")
+                || path.EndsWith(".mov") || path.EndsWith(".m3u8") || path.EndsWith(".mpd") || path.EndsWith(".avi");
+        }
+
+        // The bundled silent placeholder clip, shown until a real source is loaded.
+        private string TestClipPath()
+        {
+            var dir = System.IO.Path.GetDirectoryName(_exePath) ?? ".";
+            return System.IO.Path.Combine(dir, "test-clip.mp4");
         }
 
         /// <summary>Handles an overlay placement command (fires on the Unity main thread from a button).</summary>
@@ -197,24 +250,19 @@ namespace Stellar.WorldScreen
                 PumpVolume(dt);
         }
 
-        // AVPro spike: create the player once, open the bundled clip, then each frame show its decoded
-        // texture on the world screen and drive distance volume. AVPro handles decode + A/V sync internally.
+        // AVPro playback tick: load the initial (placeholder) source once, then each frame show AVPro's
+        // decoded texture on the world screen and drive distance volume. AVPro handles A/V sync internally.
         private void UpdateAvPro(float dt)
         {
-            if (!_avproOpened)
+            if (!_avproInitDone)
             {
-                _avpro.EnsureCreated();
-                var dir = System.IO.Path.GetDirectoryName(_exePath) ?? ".";
-                var path = System.IO.Path.Combine(dir, "avpro-test.mp4");
-                var ok = _avpro.Open(path);
-                _avproOpened = true;
-                _log.Info($"[WorldScreen] AVPro Open('{path}') -> {ok}");
-                _overlay.SetStatus(ok ? "AVPro: opening…" : "AVPro: open FAILED");
+                _avproInitDone = true;
+                LoadSource(ResolveInitialSource()); // silent bundled clip until the user loads a URL/file
                 return;
             }
 
             var tex = _avpro.CurrentTexture();
-            if (tex == null) return; // first frame not ready yet
+            if (tex == null) return; // nothing opened yet, or first frame not ready
 
             int w = _avpro.VideoWidth, h = _avpro.VideoHeight;
             if (w <= 0 || h <= 0) { w = tex.width; h = tex.height; }
