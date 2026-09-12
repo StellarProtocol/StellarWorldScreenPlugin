@@ -24,6 +24,10 @@
       <HintPath>refs/AVProVideo.Runtime.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="AVProVideo.Extensions.UnityUI">
+      <HintPath>refs/AVProVideo.Extensions.UnityUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="tests/**/*.cs" />

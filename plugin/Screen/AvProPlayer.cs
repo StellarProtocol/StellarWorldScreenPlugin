@@ -17,6 +17,9 @@ namespace Stellar.WorldScreen.Screen
         /// <summary>True once the MediaPlayer component exists.</summary>
         public bool Exists => _mp != null;
 
+        /// <summary>The underlying AVPro MediaPlayer (null until created) — for a DisplayUGUI to bind to.</summary>
+        public MediaPlayer? Player => _mp;
+
         /// <summary>Creates the MediaPlayer once (on its own DontDestroyOnLoad object), audio via System.</summary>
         public void EnsureCreated()
         {

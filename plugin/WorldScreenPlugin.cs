@@ -300,8 +300,7 @@ namespace Stellar.WorldScreen
                 _playerNear = dist >= 0f && dist <= InteractRadius; // gates the proximity menu (ShouldRender)
                 if (_fullscreen.Visible)
                 {
-                    _fullscreen.SetTexture(tex, w, h);
-                    _fullscreen.Tick(dt);
+                    _fullscreen.Tick(dt); // DisplayUGUI renders the video itself; this drives the bar + auto-hide
                     if (Input.GetKeyDown(KeyCode.Escape)) _fullscreen.Hide(); // always-available exit fallback
                 }
                 else
@@ -319,13 +318,6 @@ namespace Stellar.WorldScreen
             {
                 _avpro.SetVolume(1f); // full volume while watching in full-screen (bar has a mute toggle)
                 _lastVolume = -1;     // force distance-volume to re-apply after exit
-                var tex = _avpro.CurrentTexture();
-                if (tex != null)
-                {
-                    int w = _avpro.VideoWidth, h = _avpro.VideoHeight;
-                    if (w <= 0 || h <= 0) { w = tex.width; h = tex.height; }
-                    _fullscreen.SetTexture(tex, w, h);
-                }
             }
         }
 

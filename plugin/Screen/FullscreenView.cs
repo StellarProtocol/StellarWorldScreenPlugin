@@ -4,6 +4,7 @@ using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
 using Il2CppInterop.Runtime;
+using RenderHeads.Media.AVProVideo;
 
 namespace Stellar.WorldScreen.Screen
 {
@@ -20,8 +21,7 @@ namespace Stellar.WorldScreen.Screen
         private const float IdleHideSeconds = 3f;
 
         private GameObject? _root;
-        private RawImage? _image;
-        private RectTransform? _imageRt;
+        private DisplayUGUI? _display; // AVPro's own uGUI renderer (correct YCbCr/colour-space/orientation)
 
         private CanvasGroup? _barGroup;
         private Image? _seekFill;
@@ -47,22 +47,6 @@ namespace Stellar.WorldScreen.Screen
         public void Hide() { if (_root != null) _root.SetActive(false); }
         public void Toggle() { if (Visible) Hide(); else Show(); }
 
-        /// <summary>Assigns the current video texture and aspect-fits it (call each frame while visible).</summary>
-        public void SetTexture(Texture tex, int vw, int vh)
-        {
-            if (_image == null || tex == null) return;
-            if (!ReferenceEquals(_image.texture, tex)) _image.texture = tex;
-            float sw = UnityEngine.Screen.width, sh = UnityEngine.Screen.height;
-            if (sw > 0f && sh > 0f)
-            {
-                float va = (vw > 0 && vh > 0) ? (float)vw / vh : 16f / 9f;
-                float sa = sw / sh;
-                float w, h;
-                if (sa > va) { h = sh; w = sh * va; } else { w = sw; h = sw / va; }
-                if (_imageRt != null) _imageRt.sizeDelta = new Vector2(w, h);
-            }
-        }
-
         /// <summary>Per-frame: refresh labels/seek bar and run the auto-hide drawer (call each frame while shown).</summary>
         public void Tick(float dt)
         {
@@ -77,7 +61,7 @@ namespace Stellar.WorldScreen.Screen
 
         public void Destroy()
         {
-            if (_root != null) { UnityEngine.Object.Destroy(_root); _root = null; _image = null; _imageRt = null; }
+            if (_root != null) { UnityEngine.Object.Destroy(_root); _root = null; _display = null; }
             _clickRefs.Clear();
         }
 
@@ -97,14 +81,14 @@ namespace Stellar.WorldScreen.Screen
             var bg = NewImage(_root.transform, "Backdrop", Color.black);
             StretchFull(bg.rectTransform);
 
-            var imgGo = new GameObject("Video");
-            imgGo.transform.SetParent(_root.transform, false);
-            _image = imgGo.AddComponent<RawImage>();
-            _imageRt = _image.rectTransform;
-            _imageRt.anchorMin = _imageRt.anchorMax = new Vector2(0.5f, 0.5f);
-            _imageRt.pivot = new Vector2(0.5f, 0.5f);
-            _imageRt.anchoredPosition = Vector2.zero;
-            _image.uvRect = new Rect(0f, 1f, 1f, -1f);  // AVPro texture upright with this flip (matches world screen)
+            // AVPro's own uGUI renderer: applies the correct material (YCbCr→RGB, colour space, flip) so the
+            // video looks right — a plain RawImage of the raw texture bands/mis-colours. Stretched full; its
+            // default scale mode letterboxes to keep aspect.
+            var videoGo = new GameObject("Video");
+            videoGo.transform.SetParent(_root.transform, false);
+            _display = videoGo.AddComponent<DisplayUGUI>();
+            StretchFull(_display.rectTransform);
+            if (_player?.Player != null) _display.CurrentMediaPlayer = _player.Player;
 
             _font = ResolveFont();
             BuildControlBar();

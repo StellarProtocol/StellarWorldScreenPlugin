@@ -13,6 +13,7 @@ GM="$(ls -d /opt/game/BlueProtocol2/drive_c/Star/StarLauncher/game/release_*/gam
 echo "=== vendor AVPro interop stub (game's video engine; not in InteropRefs) ==="
 mkdir -p "$ROOT/plugin/refs"
 cp -f "$GM/BepInEx/interop/AVProVideo.Runtime.dll" "$ROOT/plugin/refs/AVProVideo.Runtime.dll"
+ cp -f "$GM/BepInEx/interop/AVProVideo.Extensions.UnityUI.dll" "$ROOT/plugin/refs/AVProVideo.Extensions.UnityUI.dll"
 
 echo "=== build plugin (Release) ==="
 "$DOTNET" build "$ROOT/plugin/Stellar.WorldScreen.csproj" -c Release --nologo
