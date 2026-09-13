@@ -28,6 +28,8 @@
     <Compile Include="../Net/WireCodec.cs" />
     <Compile Include="../Net/PortalCanonical.cs" />
     <Compile Include="../Net/PortalDtos.cs" />
+    <Compile Include="../Net/PortalClient.cs" />
+    <Compile Include="../Net/PortalClientDtos.cs" />
     <Compile Include="../Screen/FrameSink.cs" />
     <Compile Include="../Identity/InstallKey.cs" />
     <Compile Include="../Identity/Es256.cs" />
