@@ -7,17 +7,37 @@
     <NoWarn>CS8632;CS8765</NoWarn>
     <RootNamespace>Stellar.WorldScreen</RootNamespace>
     <AssemblyName>Stellar.WorldScreen</AssemblyName>
-    <Version>0.1.0</Version>
+    <!-- 0.2.0: SP-1c project setup — bumps against framework 2.9.0 (World Portal FA-1/FA-2 read
+         APIs: IClientState.SceneLineId, IEntityDetail.GetVisiblePlayers()) and adds the crypto
+         packages later SP-1c tasks need (PortalClient signing, InstallKey-equivalent identity). -->
+    <Version>0.2.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Pinned to 2.7.0 to match the framework DEPLOYED in the test prefix
-         (release_3.7/.../Stellar.Framework/.stellar-version = 2.7.0). Referencing a higher
-         Abstractions than the deployed framework ships risks an assembly-bind failure at load;
-         WorldScreen uses only long-stable interfaces present in 2.7.0. -->
-    <PackageReference Include="Stellar.Abstractions" Version="2.7.0" />
+    <!-- Bumped to 2.9.0 for SP-1c (World Portal FA-1/FA-2 read APIs: IClientState.SceneLineId,
+         IEntityDetail.GetVisiblePlayers()). 2.9.0 is NOT YET PUBLISHED to NuGet (framework
+         feat/world-portal-fa-reads, ancestor commit 7f7edb1) — a local build must first pack it
+         (cd framework/src/Stellar.Abstractions, then dotnet pack -c Release -p:Version=2.9.0 -o
+         /tmp/stellar-localfeed) and seed the global package cache by restoring once with two
+         explicit "source" flags pointed at /tmp/stellar-localfeed and nuget.org (same
+         "unpublished pin" workaround as CombatMeter's 2.5.0 comment describes; the committed
+         nuget.config deliberately stays nuget.org-only, matching every sibling plugin repo) BEFORE
+         deploying against a game install whose framework hasn't reached 2.9.0 yet — referencing a
+         higher Abstractions than the deployed framework ships risks an assembly-bind failure at
+         load. -->
+    <PackageReference Include="Stellar.Abstractions" Version="2.9.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
+    <!-- Managed ECDSA for SP-1c's PortalClient/InstallKey-equivalent signing (later tasks).
+         System.Security.Cryptography's ECDsa is OS/CNG-backed and its SignData throws
+         NTE_NOT_SUPPORTED (0x80090029) under Wine/Proton (P2-SIGNING, 2026-06-30, CombatMeter).
+         BouncyCastle is pure-managed — works identically on Windows AND Wine. Merged into the
+         single plugin DLL by ILRepack.targets on Release (the deploy copies only that one DLL;
+         the framework loads plugins via Assembly.LoadFile with no sibling-dependency probing). -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.0" />
+    <!-- Build-only: merges BouncyCastle into Stellar.WorldScreen.dll on Release (see ILRepack.targets).
+         PrivateAssets=all so it never flows to the test project's transitive build. -->
+    <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.34.2" PrivateAssets="all" />
     <!-- The game's own AVPro video engine (HW decode + A/V sync). NOT in InteropRefs; deploy.sh vendors
          the game's interop stub into plugin/refs/. Private=false: the game provides it at runtime. -->
     <Reference Include="AVProVideo.Runtime">

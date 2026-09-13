@@ -1,0 +1,31 @@
+<Project>
+  <!-- Custom ILRepack merge (its presence disables ILRepack.Lib.MSBuild.Task's default target, which
+       would merge EVERY dll in the output — including the framework/Unity reference assemblies that are
+       provided at runtime). We merge ONLY BouncyCastle so the deployed plugin stays a single DLL that
+       signs under Wine/Proton, while Stellar.Abstractions / InteropRefs / AVProVideo stay external
+       (resolved by the framework / game at load time). Release-only; the Debug test build never repacks.
+       BouncyCastle isn't copy-local for a plain library, so we source it straight from its resolved
+       reference path (the NuGet cache) and hand ILRepack every reference directory as a search path so
+       it can resolve the plugin's Unity/framework references while keeping them external.
+       Copied verbatim from Stellar.CombatMeter's ILRepack.targets (SP-1c Task 1). -->
+  <Target Name="ILRepackBouncyCastle" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <ItemGroup>
+      <_BcRef Include="@(ReferencePath)" Condition="'%(Filename)' == 'BouncyCastle.Cryptography'" />
+      <_ILRepackLibDir Include="@(ReferencePath->'%(RootDir)%(Directory)'->Distinct())" />
+      <_ILRepackLibDir Include="$(OutputPath)" />
+      <ILRepackInput Include="$(TargetPath)" />
+      <ILRepackInput Include="@(_BcRef)" />
+    </ItemGroup>
+    <Error Condition="'@(_BcRef)' == ''"
+           Text="BouncyCastle.Cryptography reference not resolved — cannot merge; the deployed plugin would fail to load its signer." />
+    <Message Importance="high" Text="ILRepack: merging %(_BcRef.Identity) into $(TargetName)$(TargetExt) (internalized)…" />
+    <ILRepack
+        Parallel="true"
+        DebugInfo="false"
+        Internalize="true"
+        InputAssemblies="@(ILRepackInput)"
+        TargetKind="SameAsPrimaryAssembly"
+        OutputFile="$(TargetPath)"
+        LibraryPath="@(_ILRepackLibDir)" />
+  </Target>
+</Project>
