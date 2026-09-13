@@ -17,11 +17,17 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!-- InstallKey/Es256 (plugin/Identity) are pure managed BouncyCastle — same version pin as the
+         main plugin csproj — so the identity crypto is unit-testable off-game with plain `dotnet test`
+         and the test itself can verify signatures via BouncyCastle (see InstallKeyTests.cs header). -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.0" />
   </ItemGroup>
   <ItemGroup>
     <!-- The production files under test — compiled directly into this test assembly (not via
          ProjectReference to Stellar.WorldScreen.csproj, which pulls in Abstractions/InteropRefs). -->
     <Compile Include="../Net/WireCodec.cs" />
     <Compile Include="../Screen/FrameSink.cs" />
+    <Compile Include="../Identity/InstallKey.cs" />
+    <Compile Include="../Identity/Es256.cs" />
   </ItemGroup>
 </Project>
