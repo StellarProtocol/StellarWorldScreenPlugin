@@ -53,6 +53,28 @@ public class PortalCanonicalTests
         Assert.Equal("999|jp|1|2||0|0|0||", PortalCanonical.Heartbeat(body));
     }
 
+    [Fact]
+    public void Heartbeat_LineIdZero_RendersLiteralZero_NotEmpty()
+    {
+        // lineId=0 (the "no line id / AOI-fallback" case — the COMMON runtime value when SceneLineId
+        // is unknown) must render as literal "0", DISTINCT from an absent/null lineId which renders "".
+        // canonical.ts documents this distinction as meaningful; ground-truth vector captured from the
+        // real backend via bun. (SP-1c Task 3 review nit.)
+        var body = new HeartbeatBody(
+            CharId: 1234,
+            Region: "sea",
+            MapId: 42,
+            SceneId: 7,
+            LineId: 0,
+            PosX: 1.5,
+            PosY: 2.5,
+            PosZ: 3.5,
+            VisibleCharIds: new List<long> { 10, 20 },
+            Nonce: "n1");
+
+        Assert.Equal("1234|sea|42|7|0|1.5|2.5|3.5|10,20|n1", PortalCanonical.Heartbeat(body));
+    }
+
     // ---- Place ----
 
     [Fact]
@@ -73,6 +95,19 @@ public class PortalCanonicalTests
             Nonce: "n1");
 
         Assert.Equal("sea|42|7|1|1.5|2.5|3.5|90|1234|url|https://x/y|n1", PortalCanonical.Place(body));
+    }
+
+    [Fact]
+    public void Place_LineIdZero_RendersLiteralZero_NotEmpty()
+    {
+        // A signed place with lineId=0 (AOI-fallback / no readable line id) — the common runtime case —
+        // renders literal "0", distinct from an absent/null lineId (""). Ground-truth from the backend.
+        var body = new PlaceBody(
+            Region: "sea", MapId: 42, SceneId: 7, LineId: 0,
+            PosX: 1.5, PosY: 2.5, PosZ: 3.5, Yaw: 90, OwnerCharId: 1234,
+            SourceKind: "url", SourceUrl: "https://x/y", Nonce: "n1");
+
+        Assert.Equal("sea|42|7|0|1.5|2.5|3.5|90|1234|url|https://x/y|n1", PortalCanonical.Place(body));
     }
 
     [Fact]
