@@ -80,6 +80,11 @@ internal static class InstanceProbe
     /// Reads the framework's read APIs and assembles this tick's heartbeat body, or null when not
     /// meaningfully in-world — never a garbage heartbeat from the title screen / char-select / the
     /// world origin. Thin glue only: every interesting decision lives in the pure helpers above.
+    /// <para><b>MAIN THREAD ONLY.</b> This reads live IL2CPP game state (<c>IPlayerState.Position</c>,
+    /// <c>GetVisiblePlayers()</c>, scene state) which is only safe on the main thread. Do NOT call it from
+    /// <see cref="PortalClient.Start"/>'s background loop thread — snapshot the result on the main thread
+    /// (in the plugin's <c>OnUpdate</c>) and feed the loop that snapshot. See
+    /// <see cref="PortalClient.Start"/>'s threading note and memory <c>il2cpp-live-object-probing-safety</c>.</para>
     /// </summary>
     internal static HeartbeatBody? Gather(IPluginServices services)
     {

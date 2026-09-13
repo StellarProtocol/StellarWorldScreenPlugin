@@ -312,6 +312,14 @@ internal sealed partial class PortalClient
     /// response, exception anywhere in gather/send/parse) is logged and the loop reschedules its next
     /// tick regardless; nothing here can crash the loop or the caller's process. Dispose the returned
     /// handle to stop it.
+    /// <para><b>THREADING — load-bearing:</b> <paramref name="gather"/> is invoked on the loop's OWN
+    /// background (threadpool) thread, NOT the main thread. It must therefore NOT touch main-thread-only
+    /// game state — reading <c>IPlayerState.Position</c> / other IL2CPP live objects off the main thread
+    /// is the hazard memory <c>il2cpp-live-object-probing-safety</c> warns of. Do NOT pass
+    /// <c>() =&gt; InstanceProbe.Gather(services)</c> directly. Instead snapshot the <see cref="HeartbeatBody"/>
+    /// on the main thread (e.g. in the plugin's <c>OnUpdate</c>) into a <c>volatile</c> field and have
+    /// <paramref name="gather"/> return that snapshot. (<paramref name="onResult"/> is already marshalled
+    /// back to the main thread via <c>post</c>, so its consumer is safe.)</para>
     /// </summary>
     /// <param name="intervalMs">Overridable only for tests — production callers should use the
     /// default ~5s cadence.</param>
