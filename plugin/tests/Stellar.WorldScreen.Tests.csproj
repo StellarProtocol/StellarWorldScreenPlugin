@@ -29,6 +29,7 @@
     <Compile Include="../Net/PortalCanonical.cs" />
     <Compile Include="../Net/PortalDtos.cs" />
     <Compile Include="../Net/PortalClient.cs" />
+    <Compile Include="../Net/PortalClient.Transport.cs" />
     <Compile Include="../Net/PortalClientDtos.cs" />
     <Compile Include="../Screen/FrameSink.cs" />
     <Compile Include="../Identity/InstallKey.cs" />

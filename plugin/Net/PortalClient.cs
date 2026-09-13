@@ -28,8 +28,6 @@
 using System;
 using System.Diagnostics;
 using System.Net.Http;
-using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Stellar.WorldScreen.Identity;
@@ -40,7 +38,11 @@ namespace Stellar.WorldScreen.Net;
 /// Talks to the stellar-portal backend: signed place/update/remove/watch/block/report writes, plus a
 /// background heartbeat loop. See the file header above for the threading/error model.
 /// </summary>
-internal sealed class PortalClient
+/// <remarks>Split across two files to stay under the project's 500-LoC file guardrail (CLAUDE.md §
+/// SOLID): this file carries the public API, signing, and the background loop; the low-level HTTP
+/// request/response + JSON plumbing lives in the sibling partial <c>PortalClient.Transport.cs</c>. Pure
+/// mechanical split — no behavior differs from before.</remarks>
+internal sealed partial class PortalClient
 {
     /// <summary>Default heartbeat cadence per SP-1c's spec ("every ~5s"). <see cref="Start"/> exposes
     /// an override so tests don't have to wait multiple real-world seconds per tick.</summary>
@@ -56,6 +58,7 @@ internal sealed class PortalClient
     private readonly InstallKey _key;
     private readonly Func<long> _nowMs;
     private readonly Action<Action> _post;
+    private readonly Action<string>? _log;
 
     /// <param name="http">Caller-owned HttpClient (PortalClient never disposes it).</param>
     /// <param name="baseUrl">e.g. <c>http://127.0.0.1:8787</c> — trailing slash tolerated.</param>
@@ -64,7 +67,14 @@ internal sealed class PortalClient
     /// tests can supply a deterministic value instead of wall-clock time.</param>
     /// <param name="post">Marshals a callback onto the caller's "safe" thread — in the real plugin,
     /// <c>_services.Framework.Post</c>; in tests, typically a synchronous passthrough.</param>
-    internal PortalClient(HttpClient http, string baseUrl, InstallKey key, Func<long> nowMs, Action<Action> post)
+    /// <param name="log">Optional sink for the heartbeat loop's failure-path log lines (gather()
+    /// exceptions, non-2xx/transport heartbeat failures, unexpected tick exceptions). The real plugin
+    /// composition root will pass something like <c>_services.Framework.Log.LogWarning</c> (NOT wired
+    /// here — SP-1c Task 5/6). Defaults to <c>null</c> so existing call sites keep compiling; when
+    /// <c>null</c>, falls back to <see cref="Trace.WriteLine(string)"/> as before. <c>Trace.WriteLine</c>
+    /// is NOT bridged to the plugin log under BepInEx/IL2CPP, so without an injected sink a 401 storm or
+    /// heartbeat failure is invisible in-game — see this parameter's motivation in the file header.</param>
+    internal PortalClient(HttpClient http, string baseUrl, InstallKey key, Func<long> nowMs, Action<Action> post, Action<string>? log = null)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         if (string.IsNullOrWhiteSpace(baseUrl)) throw new ArgumentException("baseUrl is required", nameof(baseUrl));
@@ -72,26 +82,44 @@ internal sealed class PortalClient
         _key = key ?? throw new ArgumentNullException(nameof(key));
         _nowMs = nowMs ?? throw new ArgumentNullException(nameof(nowMs));
         _post = post ?? throw new ArgumentNullException(nameof(post));
+        _log = log;
+    }
+
+    // Routes a heartbeat-loop failure-path message through the caller-injected sink when present;
+    // otherwise falls back to Trace.WriteLine (pre-existing behavior, kept for callers that don't wire
+    // a log sink yet). Trace.WriteLine is NOT bridged to the plugin log under BepInEx/IL2CPP — the
+    // fallback exists only so nothing silently disappears when a caller hasn't wired `log` yet.
+    private void LogFailure(string message)
+    {
+        if (_log != null) _log.Invoke(message);
+        else Trace.WriteLine(message);
     }
 
     // ---------------------------------------------------------------------------------------------
     // Number bridging (cross-repo invariant, load-bearing — see docs/api.md "Numbers are stringified
-    // culture-INVARIANT"). The game hands positions to callers as `float` (IPlayerState.Position /
-    // Position3D). Widening a "dirty" float straight to double (1.1f -> 1.100000023841858...) and then
-    // formatting it would produce a string the backend's JS `String(n)` never produces for the same
-    // logical value — a silent 401, since the signature covers a different byte string than the one
-    // the server recomputes from the same JSON number. Rounding to a fixed, generous precision BEFORE
-    // it becomes a double removes the float noise so the canonical string and the JSON body both carry
-    // the SAME clean value (see PortalClientTests.RoundCoord_DirtyFloat_...). Callers (SP-1c Task 5/6)
-    // must route every game-supplied coordinate through this ONE helper before constructing a
-    // HeartbeatBody/PlaceBody — rounding twice, or rounding only one of canonical/JSON, is exactly the
-    // bug this exists to prevent.
+    // culture-INVARIANT"). The game hands positions AND yaw to callers as `float`
+    // (IPlayerState.Position / Position3D, and the signed yaw/heading field). Widening a "dirty" float
+    // straight to double (1.1f -> 1.100000023841858...) and then formatting it would produce a string
+    // the backend's JS `String(n)` never produces for the same logical value — a silent 401, since the
+    // signature covers a different byte string than the one the server recomputes from the same JSON
+    // number. This is NOT position-specific: `PortalCanonical.Place`'s `Yaw` field is a signed float
+    // going through the exact same canonical/JSON pipeline, so a dirty widened yaw 401s exactly the
+    // same way a dirty widened position does. Rounding to a fixed, generous precision BEFORE it becomes
+    // a double removes the float noise so the canonical string and the JSON body both carry the SAME
+    // clean value (see PortalClientTests.RoundSignedCanonicalFloat_DirtyFloat_...). Callers (SP-1c Task
+    // 5/6) must route EVERY game-supplied signed float that enters a canonical — positions AND yaw —
+    // through this ONE helper before constructing a HeartbeatBody/PlaceBody; rounding twice, rounding
+    // only one of canonical/JSON, or forgetting yaw because it isn't a "coordinate", is exactly the bug
+    // this exists to prevent.
     // ---------------------------------------------------------------------------------------------
 
-    /// <summary>Rounds a game-supplied <c>float</c> coordinate to millimeter precision (3 decimal
-    /// places) as a stable <c>double</c>, removing the float->double widening noise so the SAME value
-    /// can be used for both the signed canonical string and the JSON wire body.</summary>
-    internal static double RoundCoord(float value) => Math.Round((double)value, 3, MidpointRounding.AwayFromZero);
+    /// <summary>Rounds ANY game-supplied signed <c>float</c> that will enter a signed canonical string —
+    /// a position component (X/Y/Z) OR <see cref="PlaceBody.Yaw"/> — to millimeter/thousandth-of-a-degree
+    /// precision (3 decimal places) as a stable <c>double</c>, removing float-&gt;double widening noise
+    /// so the SAME value is used for both the signed canonical string and the JSON wire body. Callers
+    /// MUST route yaw through this helper exactly like positions — skipping it for yaw silently
+    /// reproduces the same 401 this helper exists to prevent.</summary>
+    internal static double RoundSignedCanonicalFloat(float value) => Math.Round((double)value, 3, MidpointRounding.AwayFromZero);
 
     // ---------------------------------------------------------------------------------------------
     // Signed writes
@@ -334,7 +362,7 @@ internal sealed class PortalClient
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine($"[PortalClient] heartbeat gather() threw at t={_owner._nowMs()}: {ex.Message}");
+                    _owner.LogFailure($"[PortalClient] heartbeat gather() threw at t={_owner._nowMs()}: {ex.Message}");
                     body = null;
                 }
 
@@ -349,12 +377,12 @@ internal sealed class PortalClient
                     {
                         // HeartbeatAsync already swallows HTTP/transport/sign failures into a typed
                         // result — this is a belt-and-braces guard so truly nothing can escape the loop.
-                        Trace.WriteLine($"[PortalClient] heartbeat tick threw unexpectedly at t={_owner._nowMs()}: {ex.Message}");
+                        _owner.LogFailure($"[PortalClient] heartbeat tick threw unexpectedly at t={_owner._nowMs()}: {ex.Message}");
                         result = HeartbeatResult.Failure(0, ex.Message);
                     }
 
                     if (!result.Ok)
-                        Trace.WriteLine($"[PortalClient] heartbeat failed at t={_owner._nowMs()}: status={result.StatusCode} error={result.Error}");
+                        _owner.LogFailure($"[PortalClient] heartbeat failed at t={_owner._nowMs()}: status={result.StatusCode} error={result.Error}");
 
                     if (!_disposed)
                         _owner._post(() => _onResult(result));
@@ -363,7 +391,7 @@ internal sealed class PortalClient
             catch (Exception ex)
             {
                 // Absolutely nothing may escape this timer callback and kill the loop.
-                Trace.WriteLine($"[PortalClient] heartbeat loop tick failed unexpectedly at t={_owner._nowMs()}: {ex.Message}");
+                _owner.LogFailure($"[PortalClient] heartbeat loop tick failed unexpectedly at t={_owner._nowMs()}: {ex.Message}");
             }
             finally
             {
@@ -380,149 +408,6 @@ internal sealed class PortalClient
         }
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // HTTP + JSON plumbing
-    // ---------------------------------------------------------------------------------------------
-
-    private readonly struct HttpOutcome
-    {
-        internal bool Ok { get; }
-        internal int Status { get; }
-        internal string? Error { get; }
-        internal string? Body { get; }
-
-        internal HttpOutcome(bool ok, int status, string? error, string? body)
-        {
-            Ok = ok;
-            Status = status;
-            Error = error;
-            Body = body;
-        }
-    }
-
-    // Every write/read funnels through here. Never throws: a non-2xx status, a malformed/absent
-    // response body, or a transport-level exception (DNS failure, connection refused, TLS error,
-    // request timeout) all become a HttpOutcome with Ok == false.
-    private async Task<HttpOutcome> SendAsync(HttpMethod method, string path, object? jsonBody)
-    {
-        try
-        {
-            using var req = new HttpRequestMessage(method, _baseUrl + path);
-            if (jsonBody != null)
-            {
-                var json = JsonSerializer.Serialize(jsonBody);
-                req.Content = new StringContent(json, Encoding.UTF8, "application/json");
-            }
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(RequestTimeoutMs));
-            using var resp = await _http.SendAsync(req, cts.Token).ConfigureAwait(false);
-            var status = (int)resp.StatusCode;
-
-            string? text = null;
-            try
-            {
-                text = await resp.Content.ReadAsStringAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-            catch
-            {
-                // Body read failed after we already have a status — treat as an empty body rather than
-                // masking the real HTTP status with a transport-failure shape.
-            }
-
-            return resp.IsSuccessStatusCode
-                ? new HttpOutcome(true, status, null, text)
-                : new HttpOutcome(false, status, ExtractError(text) ?? $"HTTP {status}", text);
-        }
-        catch (Exception ex)
-        {
-            return new HttpOutcome(false, 0, ex.Message, null);
-        }
-    }
-
-    // docs/api.md: every write route's failure body is `Response.json({error}, {status})`.
-    private static string? ExtractError(string? body)
-    {
-        if (string.IsNullOrEmpty(body)) return null;
-        try
-        {
-            using var doc = JsonDocument.Parse(body!);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
-                doc.RootElement.TryGetProperty("error", out var err) &&
-                err.ValueKind == JsonValueKind.String)
-                return err.GetString();
-        }
-        catch
-        {
-            // Not JSON / malformed — the caller still has the raw body as a fallback error string.
-        }
-        return null;
-    }
-
-    private static HeartbeatResult ParseHeartbeatBody(int status, string? body)
-    {
-        if (string.IsNullOrEmpty(body)) return HeartbeatResult.Failure(status, "empty response body");
-        try
-        {
-            using var doc = JsonDocument.Parse(body!);
-            var root = doc.RootElement;
-            var instanceId = GetStr(root, "instanceId");
-
-            var portals = new System.Collections.Generic.List<PortalInfo>();
-            if (root.TryGetProperty("portals", out var arr) && arr.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var p in arr.EnumerateArray())
-                {
-                    double px = 0, py = 0, pz = 0;
-                    if (p.TryGetProperty("pos", out var posEl) && posEl.ValueKind == JsonValueKind.Object)
-                    {
-                        px = GetNum(posEl, "x");
-                        py = GetNum(posEl, "y");
-                        pz = GetNum(posEl, "z");
-                    }
-
-                    portals.Add(new PortalInfo(
-                        PortalId: GetStr(p, "portalId") ?? string.Empty,
-                        OwnerName: GetStr(p, "ownerName"),
-                        PosX: px,
-                        PosY: py,
-                        PosZ: pz,
-                        Yaw: GetNum(p, "yaw"),
-                        Source: GetStr(p, "source"),
-                        SourceKind: GetStr(p, "sourceKind"),
-                        WatcherCount: GetIntOr(p, "watcherCount", 0)));
-                }
-            }
-
-            return new HeartbeatResult(true, status, null, instanceId, portals);
-        }
-        catch (Exception ex)
-        {
-            return HeartbeatResult.Failure(status, $"parse error: {ex.Message}");
-        }
-    }
-
-    private static PlaceResult ParsePlaceBody(int status, string? body)
-    {
-        if (string.IsNullOrEmpty(body)) return PlaceResult.Failure(status, "empty response body");
-        try
-        {
-            using var doc = JsonDocument.Parse(body!);
-            return new PlaceResult(true, status, null, GetStr(doc.RootElement, "portalId"));
-        }
-        catch (Exception ex)
-        {
-            return PlaceResult.Failure(status, $"parse error: {ex.Message}");
-        }
-    }
-
-    private static string? GetStr(JsonElement el, string name) =>
-        el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
-            ? v.GetString()
-            : null;
-
-    private static double GetNum(JsonElement el, string name) =>
-        el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out var v) && v.TryGetDouble(out var d) ? d : 0;
-
-    private static int GetIntOr(JsonElement el, string name, int fallback) =>
-        el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out var v) && v.TryGetInt32(out var i) ? i : fallback;
+    // HTTP + JSON plumbing (SendAsync/ExtractError/ParseHeartbeatBody/ParsePlaceBody/Get*) lives in the
+    // sibling partial PortalClient.Transport.cs — see the file-guardrail note on the class doc above.
 }

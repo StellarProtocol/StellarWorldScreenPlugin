@@ -60,8 +60,8 @@ public class PortalClientTests
         Content = new StringContent(json, Encoding.UTF8, "application/json"),
     };
 
-    private static PortalClient MakeClient(StubHandler stub, InstallKey key, Action<Action>? post = null, Func<long>? now = null) =>
-        new(new HttpClient(stub), "http://localhost:9999", key, now ?? (() => 0), post ?? (a => a()));
+    private static PortalClient MakeClient(StubHandler stub, InstallKey key, Action<Action>? post = null, Func<long>? now = null, Action<string>? log = null) =>
+        new(new HttpClient(stub), "http://localhost:9999", key, now ?? (() => 0), post ?? (a => a()), log);
 
     // ---- PlaceAsync ----
 
@@ -408,13 +408,95 @@ public class PortalClientTests
         Assert.Equal(countAtDispose, gatherCount);
     }
 
+    [Fact]
+    public async Task Start_FailingTick_InvokesInjectedLogCallback()
+    {
+        // Trace.WriteLine is NOT bridged to the plugin log under BepInEx/IL2CPP (this fix's motivation)
+        // — this pins that a failing tick's failure-path message reaches an INJECTED sink instead, so a
+        // real composition root can route it to the plugin's own logger.
+        var key = NewKey();
+        var stub = new StubHandler(_ => Json(HttpStatusCode.InternalServerError, "{\"error\":\"boom\"}"));
+
+        var logMessages = new List<string>();
+        void Log(string message) { lock (logMessages) logMessages.Add(message); }
+
+        var client = MakeClient(stub, key, log: Log);
+        HeartbeatBody Gather() => new(1, "sea", 1, 1, 1, 0, 0, 0, new List<long>(), null);
+
+        using var handle = client.Start(Gather, _ => { }, intervalMs: 20);
+
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (DateTime.UtcNow < deadline)
+        {
+            int count;
+            lock (logMessages) count = logMessages.Count;
+            if (count > 0) break;
+            await Task.Delay(20);
+        }
+
+        List<string> snapshot;
+        lock (logMessages) snapshot = new List<string>(logMessages);
+        Assert.NotEmpty(snapshot);
+        Assert.Contains(snapshot, m => m.Contains("heartbeat failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Start_GatherReturnsNull_SkipsTick_NoHttpCall_ThenNextNonNullTickProceeds()
+    {
+        var key = NewKey();
+        var stub = new StubHandler(_ => Json(HttpStatusCode.OK, "{\"instanceId\":\"i\",\"portals\":[]}"));
+        var client = MakeClient(stub, key);
+
+        var gatherCount = 0;
+        using var firstGatherDone = new ManualResetEventSlim(false);
+        HeartbeatBody? Gather()
+        {
+            var n = Interlocked.Increment(ref gatherCount);
+            if (n == 1)
+            {
+                firstGatherDone.Set();
+                return null; // not currently in-world — this tick must be skipped entirely
+            }
+            return new HeartbeatBody(1, "sea", 1, 1, 1, 0, 0, 0, new List<long>(), null);
+        }
+
+        var results = new List<HeartbeatResult>();
+        void OnResult(HeartbeatResult r) { lock (results) results.Add(r); }
+
+        // A generous interval: the first (null) tick fires immediately (due time 0); the loop only
+        // schedules its NEXT tick after this one completes, so a wide gap here gives plenty of room to
+        // observe "no HTTP call yet" before the second tick could possibly fire.
+        using var handle = client.Start(Gather, OnResult, intervalMs: 200);
+
+        Assert.True(firstGatherDone.Wait(TimeSpan.FromSeconds(2)), "expected the first gather() call within 2s");
+        await Task.Delay(50); // brief window; would catch a spurious HTTP call from a broken null-skip
+        Assert.Empty(stub.Requests); // the null-gather tick made NO HTTP call — the stub was never invoked
+
+        // Bounded wait for the second (non-null) tick to deliver a result — proves the loop stayed alive
+        // and the next non-null tick proceeds normally.
+        var deadline = DateTime.UtcNow.AddSeconds(3);
+        while (DateTime.UtcNow < deadline)
+        {
+            int count;
+            lock (results) count = results.Count;
+            if (count >= 1) break;
+            await Task.Delay(20);
+        }
+
+        List<HeartbeatResult> snapshot;
+        lock (results) snapshot = new List<HeartbeatResult>(results);
+        Assert.True(snapshot.Count >= 1, "expected the non-null tick to deliver a result");
+        Assert.True(snapshot[0].Ok);
+        Assert.Single(stub.Requests); // exactly one HTTP call total, from the non-null tick only
+    }
+
     // ---- Number rounding (cross-language stability for a "dirty" widened float) ----
 
     [Fact]
-    public void RoundCoord_DirtyFloat_ProducesStableString_InCanonicalAndJson()
+    public void RoundSignedCanonicalFloat_DirtyFloat_ProducesStableString_InCanonicalAndJson()
     {
         const float dirty = 1.1f; // widens to 1.100000023841858... as a raw double
-        var rounded = PortalClient.RoundCoord(dirty);
+        var rounded = PortalClient.RoundSignedCanonicalFloat(dirty);
 
         var body = new HeartbeatBody(1, "sea", 1, 1, 1, rounded, 0, 0, new List<long>(), "n");
         var canonical = PortalCanonical.Heartbeat(body);
@@ -425,10 +507,30 @@ public class PortalClientTests
     }
 
     [Fact]
-    public void RoundCoord_NegativeDirtyFloat_RoundTrips()
+    public void RoundSignedCanonicalFloat_NegativeDirtyFloat_RoundTrips()
     {
         const float dirty = -2.35f;
-        var rounded = PortalClient.RoundCoord(dirty);
+        var rounded = PortalClient.RoundSignedCanonicalFloat(dirty);
         Assert.Equal("-2.35", rounded.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    // Yaw is ALSO a signed float that enters PortalCanonical.Place — it must go through the SAME
+    // rounding helper as positions, or a dirty widened yaw silently 401s exactly like a dirty widened
+    // position would (the bug this helper's generalization exists to prevent).
+    [Fact]
+    public void RoundSignedCanonicalFloat_DirtyYawFloat_ProducesStableString_InCanonicalAndJson()
+    {
+        const float dirtyYaw = 1.1f; // widens to 1.100000023841858... as a raw double, same as a position
+        var rounded = PortalClient.RoundSignedCanonicalFloat(dirtyYaw);
+
+        var body = new PlaceBody(
+            Region: "sea", MapId: 1, SceneId: 1, LineId: 1,
+            PosX: 0, PosY: 0, PosZ: 0, Yaw: rounded, OwnerCharId: 1,
+            SourceKind: null, SourceUrl: null, Nonce: "n");
+        var canonical = PortalCanonical.Place(body);
+        Assert.Contains("|1.1|", canonical); // yaw segment renders as "1.1", never a long float tail
+
+        var json = JsonSerializer.Serialize(new { yaw = rounded });
+        Assert.Equal("{\"yaw\":1.1}", json); // the SAME rounded double serializes identically on the wire
     }
 }
