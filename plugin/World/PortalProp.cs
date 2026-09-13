@@ -1,22 +1,28 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
 namespace Stellar.WorldScreen.World
 {
     /// <summary>
-    /// One placed portal's in-world beacon (summoning-stone look): a thin glowing RING on the ground, a small
-    /// tiered PEDESTAL at its centre, a translucent light CONE flaring upward from the pedestal, a star EMBLEM
-    /// with the owner name at the cone's top, and a few drifting MOTES. Procedural + shader-safe (world-space
-    /// <see cref="Canvas"/> + <see cref="RawImage"/>/<see cref="Text"/> with generated <see cref="Texture2D"/>s
-    /// — NO <c>Shader.Find</c>, mirroring the proven WorldScreen render path). The ring stays flat; the
-    /// pedestal/cone/emblem/motes billboard toward the player. Iterated in the UI sandbox (story
-    /// <c>portal-beacon</c>) so the look is tuned without an in-game relogin.
+    /// One placed portal's in-world beacon (summoning-stone look): a genuine 3D RING of light standing up off
+    /// the ground (a cylinder wall of vertical panels) over a faint flat floor glyph, a small tiered PEDESTAL at
+    /// its centre, a translucent light CONE flaring upward from the pedestal, a star EMBLEM with the owner name
+    /// at the cone's top, and a few drifting MOTES. Procedural + shader-safe (world-space <see cref="Canvas"/> +
+    /// <see cref="RawImage"/>/<see cref="Text"/> with generated <see cref="Texture2D"/>s — NO <c>Shader.Find</c>,
+    /// mirroring the proven WorldScreen render path; the <c>UI/Default</c> shader is <c>Cull Off</c>, so the wall
+    /// panels read from every angle). The 3D ring spins about its vertical axis; the pedestal/cone/emblem/motes
+    /// billboard toward the player. Iterated in the UI sandbox (story <c>portal-beacon</c>) so the look is tuned
+    /// without an in-game relogin.
     /// </summary>
     internal sealed class PortalProp
     {
         private const float RingDiameterM = 5.0f;   // big thin ground ring
+        private const float RingRadiusM = RingDiameterM / 2f;
+        private const int RingSegments = 24;         // vertical panels forming the 3D wall
+        private const float WallHeightM = 0.72f;     // how tall the ring wall rises off the ground
         private const float PedestalWM = 0.85f, PedestalHM = 1.05f;
         private const float ConeWTopM = 2.5f, ConeHM = 2.9f;
         private const float ConeBaseYM = 0.55f;      // cone starts atop the pedestal
@@ -24,12 +30,14 @@ namespace Stellar.WorldScreen.World
         private const int MoteCount = 4;
 
         private GameObject? _root;
-        private GameObject? _ringGo;   // flat, spun
+        private GameObject? _floorGo;  // faint flat floor glyph under the wall
+        private GameObject? _ringGroup;// the 3D cylinder wall of light, spun about Y
         private GameObject? _facing;   // billboarded group (pedestal + cone + emblem + motes)
         private GameObject? _emblemGo;
-        private RawImage? _ringImg;
+        private RawImage? _floorImg;
         private RawImage? _coneImg;
         private Text? _label;
+        private readonly List<RawImage> _wallPanels = new List<RawImage>(RingSegments);
         private readonly GameObject?[] _motes = new GameObject?[MoteCount];
         private Quaternion _flatRot = Quaternion.identity;
 
@@ -54,8 +62,14 @@ namespace Stellar.WorldScreen.World
                     _facing.transform.rotation = Quaternion.LookRotation(dir.normalized, Vector3.up);
             }
 
-            if (_ringGo != null) _ringGo.transform.localRotation = _flatRot * Quaternion.Euler(0f, 0f, time * 18f);
-            if (_ringImg != null) _ringImg.color = Alpha(Tint, 0.78f + 0.22f * Mathf.Sin(time * 2.0f));
+            if (_ringGroup != null) _ringGroup.transform.localRotation = Quaternion.Euler(0f, time * 22f, 0f);
+            if (_wallPanels.Count > 0)
+            {
+                float wallA = 0.72f + 0.20f * Mathf.Sin(time * 2.0f);
+                for (int i = 0; i < _wallPanels.Count; i++)
+                    if (_wallPanels[i] != null) _wallPanels[i].color = Alpha(Tint, wallA);
+            }
+            if (_floorImg != null) _floorImg.color = Alpha(Tint, 0.32f + 0.12f * Mathf.Sin(time * 2.0f));
             if (_coneImg != null) _coneImg.color = Alpha(Tint, 0.62f + 0.16f * Mathf.Sin(time * 2.4f + 0.6f));
             if (_emblemGo != null)
                 _emblemGo.transform.localPosition = new Vector3(0f, ConeBaseYM + ConeHM + 0.45f + 0.06f * Mathf.Sin(time * 1.6f), 0.001f);
@@ -78,7 +92,9 @@ namespace Stellar.WorldScreen.World
             if (_root != null)
             {
                 UnityEngine.Object.Destroy(_root);
-                _root = null; _ringGo = null; _facing = null; _emblemGo = null; _ringImg = null; _coneImg = null; _label = null;
+                _root = null; _floorGo = null; _ringGroup = null; _facing = null; _emblemGo = null;
+                _floorImg = null; _coneImg = null; _label = null;
+                _wallPanels.Clear();
                 for (int i = 0; i < _motes.Length; i++) _motes[i] = null;
             }
         }
@@ -91,12 +107,17 @@ namespace Stellar.WorldScreen.World
             _root = new GameObject("StellarPortalBeacon");
             UnityEngine.Object.DontDestroyOnLoad(_root);
 
-            // Flat ground ring.
-            _ringGo = WorldCanvas("Ring", _root.transform, 256, 256, RingDiameterM / 256f);
+            // Faint flat floor glyph, lying in the ground plane, under the 3D wall.
+            _floorGo = WorldCanvas("Floor", _root.transform, 256, 256, RingDiameterM / 256f);
             _flatRot = Quaternion.LookRotation(Vector3.up, Vector3.forward);
-            _ringGo.transform.localRotation = _flatRot;
-            _ringImg = _ringGo.AddComponent<RawImage>();
-            _ringImg.texture = RingTex();
+            _floorGo.transform.localRotation = _flatRot;
+            _floorImg = _floorGo.AddComponent<RawImage>();
+            _floorImg.texture = FloorTex();
+
+            // Genuine 3D ring: a cylinder wall of vertical light panels standing off the ground. Each panel is a
+            // world-space RawImage (UI/Default shader is Cull Off, so it reads from both sides — shader-safe in
+            // the sandbox AND the game). The whole group spins about Y in Tick.
+            BuildRingWall();
 
             // Billboarded group.
             _facing = new GameObject("Facing");
@@ -143,6 +164,32 @@ namespace Stellar.WorldScreen.World
             }
         }
 
+        // Builds the 3D ring: RingSegments vertical light panels evenly around a circle of RingRadiusM, each
+        // standing WallHeightM tall with its face pointing radially outward. Parented under a group that Tick
+        // spins about Y. Each panel's UI/Default material is Cull Off, so the wall reads from every viewing angle.
+        private void BuildRingWall()
+        {
+            _ringGroup = new GameObject("RingWall");
+            _ringGroup.transform.SetParent(_root!.transform, false);
+
+            float arc = 2f * Mathf.PI * RingRadiusM / RingSegments;
+            float panelW = arc * 1.18f;   // slight overlap hides the seams between panels
+            var wallTex = WallTex();
+            for (int i = 0; i < RingSegments; i++)
+            {
+                float ang = i * (2f * Mathf.PI / RingSegments);
+                var dir = new Vector3(Mathf.Cos(ang), 0f, Mathf.Sin(ang));
+                var panel = WorldCanvas("Wall" + i, _ringGroup.transform, 64, 64, 1f);
+                panel.transform.localPosition = dir * RingRadiusM + Vector3.up * (WallHeightM / 2f);
+                panel.transform.localRotation = Quaternion.LookRotation(dir, Vector3.up);
+                panel.transform.localScale = new Vector3(panelW / 64f, WallHeightM / 64f, 1f);
+                var img = panel.AddComponent<RawImage>();
+                img.texture = wallTex;
+                img.color = Alpha(Tint, 0.72f);
+                _wallPanels.Add(img);
+            }
+        }
+
         // A world-space canvas child sized w×h pixels, scaled to metres (uniform unless overridden after).
         private static GameObject WorldCanvas(string name, Transform parent, int w, int h, float scale)
         {
@@ -163,20 +210,43 @@ namespace Stellar.WorldScreen.World
 
         // ---- procedural textures (built once, shared) ----
 
-        private static Texture2D? _ring, _cone, _ped, _emblem, _mote;
+        private static Texture2D? _floor, _wall, _cone, _ped, _emblem, _mote;
 
-        private static Texture2D RingTex()
+        // The faint flat glyph on the ground under the 3D wall: an outer rim, a faint inner ring, and a soft
+        // disc glow — reads as a summoning circle that the light wall rises from.
+        private static Texture2D FloorTex()
         {
-            if (_ring != null) return _ring;
+            if (_floor != null) return _floor;
             const int N = 256;
-            _ring = Build(N, N, (x, y) =>
+            _floor = Build(N, N, (x, y) =>
             {
                 float c = (N - 1) / 2f, R = (N / 2f) - 2f;
                 float d = Mathf.Sqrt((x - c) * (x - c) + (y - c) * (y - c)) / R;
-                float line = Mathf.Exp(-Mathf.Pow((d - 0.96f) / 0.022f, 2f)); // thin bright rim
-                return d > 1f ? 0f : Mathf.Clamp01(line);
+                if (d > 1f) return 0f;
+                float rim = Mathf.Exp(-Mathf.Pow((d - 0.96f) / 0.030f, 2f));         // outer rim
+                float inner = Mathf.Exp(-Mathf.Pow((d - 0.62f) / 0.020f, 2f)) * 0.5f; // faint inner ring
+                float fill = (1f - d) * 0.10f;                                        // soft disc glow
+                return Mathf.Clamp01(rim + inner + fill);
             });
-            return _ring;
+            return _floor;
+        }
+
+        // One vertical light panel of the 3D ring wall: brightest at the foot (a crisp base line + a rising
+        // glow), fading upward, with softened side edges so adjacent panels blend into a continuous curtain.
+        private static Texture2D WallTex()
+        {
+            if (_wall != null) return _wall;
+            const int W = 64, H = 64;
+            _wall = Build(W, H, (x, y) =>
+            {
+                float up = y / (float)(H - 1);                                   // 0 base … 1 top
+                float fx = Mathf.Abs(x / (float)(W - 1) - 0.5f) * 2f;            // 0 centre … 1 edge
+                float rise = Mathf.Exp(-up * 2.4f);                              // bright at the ground, fading up
+                float baseLine = Mathf.Exp(-Mathf.Pow((up - 0.05f) / 0.05f, 2f)); // crisp bright line at the foot
+                float edge = Mathf.Clamp01(1f - Mathf.Pow(fx, 4f));             // soften side seams
+                return Mathf.Clamp01(edge * (0.8f * rise + 0.9f * baseLine));
+            });
+            return _wall;
         }
 
         private static Texture2D ConeTex()
