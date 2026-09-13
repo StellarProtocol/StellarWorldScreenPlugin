@@ -19,17 +19,17 @@ namespace Stellar.WorldScreen.World
     /// </summary>
     internal sealed partial class PortalProp
     {
-        private const float RingDiameterM = 5.0f;   // big thin ground ring
+        private const float RingDiameterM = 4.2f;   // ground ring (smaller, tighter)
         private const float RingRadiusM = RingDiameterM / 2f;
-        private const int RingSegments = 24;         // vertical panels forming the 3D wall
-        private const float WallHeightM = 0.72f;     // how tall the ring wall rises off the ground
+        private const int RingSegments = 40;         // many vertical panels → a smooth circle wall
+        private const float WallHeightM = 0.55f;     // how tall the ring wall rises off the ground
 
         // 3D pedestal — three stacked stone drums (real side faces + real top caps), then a flared 3D cone.
         private const int TierSides = 8;             // faces per drum (rounder = more)
         private const float PedTopYM = 0.82f;        // top of the pedestal (cone starts here)
-        private const int ConeSides = 12;            // panels forming the flared 3D cone
-        private const float ConeBotRM = 0.30f, ConeTopRM = 1.35f; // cone radius at base / top
-        private const float ConeHM = 2.75f;          // cone height (above the pedestal top)
+        private const float ConeTopRM = 0.85f;       // cone glow half-width up top (narrower beacon)
+        private const float ConeHM = 1.8f;           // cone height above the pedestal top (shorter beacon)
+        private const float NameYM = PedTopYM + 0.7f; // name floats low, near the pedestal (not up high)
 
         private static readonly Color Tint = new Color(0.42f, 0.92f, 1.0f, 1f); // bright cyan
         private const int MoteCount = 4;
@@ -38,14 +38,13 @@ namespace Stellar.WorldScreen.World
         private GameObject? _floorGo;   // faint flat floor glyph under the wall
         private GameObject? _ringGroup; // the 3D cylinder wall of light, spun about Y
         private GameObject? _pedestalGo;// the 3D stone pedestal (fixed geometry, not billboarded)
-        private GameObject? _coneGroup; // the 3D flared light cone (fixed geometry)
-        private GameObject? _facing;    // billboarded group (name banner + motes only)
+        private GameObject? _facing;    // billboarded group (cone glow + name + motes)
         private GameObject? _emblemGo;
         private RawImage? _floorImg;
+        private RawImage? _coneImg;
         private RawImage? _gemImg;
         private Text? _label;
         private readonly List<RawImage> _wallPanels = new List<RawImage>(RingSegments);
-        private readonly List<RawImage> _conePanels = new List<RawImage>(ConeSides);
         private readonly GameObject?[] _motes = new GameObject?[MoteCount];
         private Quaternion _flatRot = Quaternion.identity;
 
@@ -79,18 +78,12 @@ namespace Stellar.WorldScreen.World
             }
             if (_floorImg != null) _floorImg.color = Alpha(Tint, 0.32f + 0.12f * Mathf.Sin(time * 2.0f));
 
-            // The 3D cone slowly counter-rotates and breathes (fixed geometry, so it turns about its own axis).
-            if (_coneGroup != null) _coneGroup.transform.localRotation = Quaternion.Euler(0f, time * -9f, 0f);
-            if (_conePanels.Count > 0)
-            {
-                float coneA = 0.42f + 0.12f * Mathf.Sin(time * 2.4f + 0.6f);
-                for (int i = 0; i < _conePanels.Count; i++)
-                    if (_conePanels[i] != null) _conePanels[i].color = Alpha(Tint, coneA);
-            }
+            // The soft cone glow just breathes (it billboards with the _facing group).
+            if (_coneImg != null) _coneImg.color = Alpha(Tint, 0.50f + 0.14f * Mathf.Sin(time * 2.4f + 0.6f));
             if (_gemImg != null) _gemImg.color = Alpha(new Color(0.75f, 0.98f, 1f, 1f), 0.7f + 0.3f * Mathf.Sin(time * 3.0f));
 
             if (_emblemGo != null)
-                _emblemGo.transform.localPosition = new Vector3(0f, PedTopYM + ConeHM + 0.4f + 0.06f * Mathf.Sin(time * 1.6f), 0.001f);
+                _emblemGo.transform.localPosition = new Vector3(0f, NameYM + 0.05f * Mathf.Sin(time * 1.6f), 0.001f);
 
             for (int i = 0; i < _motes.Length; i++)
             {
@@ -110,10 +103,10 @@ namespace Stellar.WorldScreen.World
             if (_root != null)
             {
                 UnityEngine.Object.Destroy(_root);
-                _root = null; _floorGo = null; _ringGroup = null; _pedestalGo = null; _coneGroup = null;
+                _root = null; _floorGo = null; _ringGroup = null; _pedestalGo = null;
                 _facing = null; _emblemGo = null;
-                _floorImg = null; _gemImg = null; _label = null;
-                _wallPanels.Clear(); _conePanels.Clear();
+                _floorImg = null; _coneImg = null; _gemImg = null; _label = null;
+                _wallPanels.Clear();
                 for (int i = 0; i < _motes.Length; i++) _motes[i] = null;
             }
         }
@@ -138,29 +131,33 @@ namespace Stellar.WorldScreen.World
             // the sandbox AND the game). The whole group spins about Y in Tick.
             BuildRingWall();
 
-            // Genuine 3D geometry (fixed — real side faces + top caps you see from above, NOT billboards):
-            // the stone pedestal, then the flared light cone rising from its top.
+            // Genuine 3D stone pedestal (fixed — real side faces + top caps you see from above, NOT a billboard).
             BuildPedestal3D(_root.transform);
-            BuildCone3D(_root.transform);
 
-            // Billboarded group — only the name banner + rising motes turn to face the player.
+            // Billboarded group — the light cone, name and motes turn to face the player.
             _facing = new GameObject("Facing");
             _facing.transform.SetParent(_root.transform, false);
 
-            // Glowing gem orb set on the pedestal top (on the Y axis, so it stays centred as the group billboards).
+            // Soft light cone rising from the pedestal: a SINGLE billboarded glow (not panels), so the beam reads
+            // smoothly from every angle. Set slightly back (+z is away from camera after the billboard) so the gem
+            // and name draw in front of it.
+            var cone = WorldCanvas("Cone", _facing.transform, 96, 128, 1f);
+            cone.transform.localPosition = new Vector3(0f, PedTopYM + ConeHM / 2f, 0.05f);
+            cone.transform.localScale = new Vector3((2f * ConeTopRM) / 96f, ConeHM / 128f, 1f);
+            _coneImg = cone.AddComponent<RawImage>();
+            _coneImg.texture = ConeGlowTex();
+            _coneImg.color = Alpha(Tint, 0.55f);
+
+            // Glowing gem orb on the pedestal top (on the Y axis, so it stays centred as the group billboards).
             var gem = WorldCanvas("Gem", _facing.transform, 40, 40, 0.42f / 40f);
             gem.transform.localPosition = new Vector3(0f, PedTopYM + 0.14f, 0f);
             _gemImg = gem.AddComponent<RawImage>();
             _gemImg.texture = GemTex();
 
-            // Star emblem + owner name above the cone top.
-            _emblemGo = WorldCanvas("Emblem", _facing.transform, 240, 90, 1.9f / 240f);
-            _emblemGo.transform.localPosition = new Vector3(0f, PedTopYM + ConeHM + 0.4f, 0.001f);
-            var emblemBg = new GameObject("EmblemBg");
-            emblemBg.transform.SetParent(_emblemGo.transform, false);
-            var ebg = emblemBg.AddComponent<RawImage>();
-            ebg.texture = EmblemTex();
-            Stretch(ebg.rectTransform);
+            // Owner name (NO background plate) floating low near the pedestal; outlined so it stays readable
+            // over the light. Only the text billboards.
+            _emblemGo = WorldCanvas("Name", _facing.transform, 240, 90, 1.9f / 240f);
+            _emblemGo.transform.localPosition = new Vector3(0f, NameYM, 0.001f);
             var labelGo = new GameObject("Label");
             labelGo.transform.SetParent(_emblemGo.transform, false);
             _label = labelGo.AddComponent<Text>();
@@ -171,6 +168,9 @@ namespace Stellar.WorldScreen.World
             _label.color = Color.white;
             _label.fontSize = 26;
             Stretch(_label.rectTransform);
+            var outline = labelGo.AddComponent<Outline>();
+            outline.effectColor = new Color(0f, 0.06f, 0.10f, 0.9f);   // dark halo for legibility
+            outline.effectDistance = new Vector2(1.6f, -1.6f);
 
             // Drifting motes.
             for (int i = 0; i < _motes.Length; i++)
@@ -190,7 +190,7 @@ namespace Stellar.WorldScreen.World
             _ringGroup.transform.SetParent(_root!.transform, false);
 
             float arc = 2f * Mathf.PI * RingRadiusM / RingSegments;
-            float panelW = arc * 1.18f;   // slight overlap hides the seams between panels
+            float panelW = arc * 1.35f;   // overlap blends the panels into a smooth continuous ring
             var wallTex = WallTex();
             for (int i = 0; i < RingSegments; i++)
             {
@@ -227,7 +227,7 @@ namespace Stellar.WorldScreen.World
 
         // ---- procedural textures (built once, shared) ----
 
-        private static Texture2D? _floor, _wall, _emblem, _mote;
+        private static Texture2D? _floor, _wall, _cone, _mote;
 
         // The faint flat glyph on the ground under the 3D wall: an outer rim, a faint inner ring, and a soft
         // disc glow — reads as a summoning circle that the light wall rises from.
@@ -259,28 +259,30 @@ namespace Stellar.WorldScreen.World
                 float up = y / (float)(H - 1);                                   // 0 base … 1 top
                 float fx = Mathf.Abs(x / (float)(W - 1) - 0.5f) * 2f;            // 0 centre … 1 edge
                 float rise = Mathf.Exp(-up * 2.4f);                              // bright at the ground, fading up
-                float baseLine = Mathf.Exp(-Mathf.Pow((up - 0.05f) / 0.05f, 2f)); // crisp bright line at the foot
-                float edge = Mathf.Clamp01(1f - Mathf.Pow(fx, 4f));             // soften side seams
-                return Mathf.Clamp01(edge * (0.8f * rise + 0.9f * baseLine));
+                float baseLine = Mathf.Exp(-Mathf.Pow((up - 0.05f) / 0.06f, 2f)); // soft bright line at the foot
+                float edge = Mathf.Exp(-Mathf.Pow(fx * 1.15f, 2f));            // soft Gaussian sides → seamless ring
+                return Mathf.Clamp01(edge * (0.8f * rise + 0.85f * baseLine));
             });
             return _wall;
         }
 
-        private static Texture2D EmblemTex()
+        // The soft light-cone glow (one billboarded quad): a bright core at the pedestal foot that flares out and
+        // fades toward the top, with Gaussian sides — a smooth beam with no panels/streaks from any angle.
+        private static Texture2D ConeGlowTex()
         {
-            if (_emblem != null) return _emblem;
-            const int W = 240, H = 90;
-            _emblem = Build(W, H, (x, y) =>
+            if (_cone != null) return _cone;
+            const int W = 96, H = 128;
+            _cone = Build(W, H, (x, y) =>
             {
-                // a soft rounded translucent banner
-                float fx = Mathf.Abs(x / (float)(W - 1) - 0.5f) * 2f; // 0..1
-                float fy = Mathf.Abs(y / (float)(H - 1) - 0.5f) * 2f;
-                float d = Mathf.Max(fx, fy * 0.9f);
-                float body = Mathf.Clamp01(1f - Mathf.Pow(d, 4f)) * 0.42f;
-                float rim = Mathf.Exp(-Mathf.Pow((d - 0.92f) / 0.05f, 2f)) * 0.7f;
-                return Mathf.Clamp01(body + rim);
+                float up = y / (float)(H - 1);                       // 0 foot … 1 top
+                float half = Mathf.Lerp(0.13f, 0.5f, up);            // flares outward toward the top
+                float fx = Mathf.Abs(x / (float)(W - 1) - 0.5f);
+                float t = fx / half;                                  // 0 axis … 1 edge of the flare
+                float radial = Mathf.Exp(-Mathf.Pow(t * 1.15f, 2f)); // soft bright core fading to the edge
+                float vert = Mathf.Lerp(0.9f, 0.22f, up);            // brightest at the pedestal, fainter aloft
+                return Mathf.Clamp01(radial * vert);
             });
-            return _emblem;
+            return _cone;
         }
 
         private static Texture2D MoteTex()

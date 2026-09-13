@@ -6,12 +6,12 @@ using UnityEngine.UI;
 namespace Stellar.WorldScreen.World
 {
     /// <summary>
-    /// The genuinely 3D parts of the beacon: a stone PEDESTAL built from stacked drums (each drum a ring of real
-    /// vertical side faces plus a real top cap you see from above) and a flared light CONE built as a truncated
-    /// cone of outward-tilted panels. Fixed geometry — it does NOT billboard, so from the game's top-down camera
-    /// it reads with true depth (stepped tops) instead of a flat cut-out. Every face is a world-space
+    /// The genuinely 3D stone PEDESTAL: three stacked drums, each a ring of real vertical side faces plus a real
+    /// horizontal top cap you see from above. Fixed geometry — it does NOT billboard, so from the game's top-down
+    /// camera it reads with true depth (stepped tops) instead of a flat cut-out. Every face is a world-space
     /// <see cref="RawImage"/> on the <c>UI/Default</c> shader (present in the sandbox AND the game; <c>Cull Off</c>,
-    /// so each face reads from both sides) — no <c>Shader.Find</c>, no magenta.
+    /// so each face reads from both sides) — no <c>Shader.Find</c>, no magenta. (The light cone is a single soft
+    /// billboarded glow, built in <see cref="PortalProp"/> itself, so the beam stays smooth from every angle.)
     /// </summary>
     internal sealed partial class PortalProp
     {
@@ -54,39 +54,9 @@ namespace Stellar.WorldScreen.World
             top.AddComponent<RawImage>().texture = capTex;
         }
 
-        // The flared 3D light cone: ConeSides outward-tilted panels forming a truncated cone from the pedestal
-        // top (radius ConeBotRM) out to radius ConeTopRM at height ConeHM. Parented to a group Tick spins about Y.
-        private void BuildCone3D(Transform parent)
-        {
-            _coneGroup = new GameObject("Cone");
-            _coneGroup.transform.SetParent(parent, false);
-            var tex = ConePanelTex();
-            float yBase = PedTopYM, yTop = PedTopYM + ConeHM;
-            float midR = (ConeBotRM + ConeTopRM) / 2f;
-            float panelW = 2f * midR * Mathf.Sin(Mathf.PI / ConeSides) * 1.25f; // generous overlap → continuous curtain
-            for (int i = 0; i < ConeSides; i++)
-            {
-                float ang = i * (2f * Mathf.PI / ConeSides);
-                var dir = new Vector3(Mathf.Cos(ang), 0f, Mathf.Sin(ang));
-                var pB = dir * ConeBotRM + Vector3.up * yBase; // panel foot (at the pedestal)
-                var pT = dir * ConeTopRM + Vector3.up * yTop;  // panel head (flared out, up high)
-                var slant = (pT - pB).normalized;
-                var tangent = Vector3.Cross(Vector3.up, dir);
-                var normal = Vector3.Cross(slant, tangent).normalized; // panel faces outward along the cone wall
-                var panel = WorldCanvas("ConePanel", _coneGroup.transform, 48, 96, 1f);
-                panel.transform.localPosition = (pB + pT) / 2f;
-                panel.transform.localRotation = Quaternion.LookRotation(normal, slant);
-                panel.transform.localScale = new Vector3(panelW / 48f, (pT - pB).magnitude / 96f, 1f);
-                var img = panel.AddComponent<RawImage>();
-                img.texture = tex;
-                img.color = Alpha(Tint, 0.42f);
-                _conePanels.Add(img);
-            }
-        }
-
         // ---- geometry textures (built once, shared) ----
 
-        private static Texture2D? _stoneSide, _stoneCap, _conePanel, _gem;
+        private static Texture2D? _stoneSide, _stoneCap, _gem;
 
         // Opaque stone side face: darker at the foot, lighter up, a lit lip at the very top, gently bevelled at
         // the vertical edges so the faceting of the drum reads.
@@ -121,21 +91,6 @@ namespace Stellar.WorldScreen.World
                 return c;
             });
             return _stoneCap;
-        }
-
-        // Translucent cone-wall gradient: glowy at the foot (by the pedestal), fading up; soft vertical seams.
-        private static Texture2D ConePanelTex()
-        {
-            if (_conePanel != null) return _conePanel;
-            _conePanel = Build(48, 96, (x, y) =>
-            {
-                float up = y / 95f;                                     // 0 foot … 1 head
-                float fx = Mathf.Abs(x / 47f - 0.5f) * 2f;
-                float vert = Mathf.Lerp(0.75f, 0.22f, up);              // bright at the pedestal, fainter aloft
-                float edge = Mathf.Clamp01(1f - Mathf.Pow(fx, 3f));    // soften side seams into a continuous cone
-                return Mathf.Clamp01(edge * vert);
-            });
-            return _conePanel;
         }
 
         // Bright cyan-white gem orb.
