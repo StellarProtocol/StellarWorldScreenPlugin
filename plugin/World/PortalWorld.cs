@@ -39,10 +39,11 @@ namespace Stellar.WorldScreen.World
             }
         }
 
-        /// <summary>Per-frame: keep every marker facing the player (upright billboard).</summary>
+        /// <summary>Per-frame: billboard + animate every beacon.</summary>
         public void Tick(Camera? cam)
         {
-            foreach (var prop in _props.Values) prop.Billboard(cam);
+            float time = Time.time;
+            foreach (var prop in _props.Values) prop.Tick(cam, time);
         }
 
         public void Destroy()
