@@ -48,6 +48,7 @@ namespace Stellar.WorldScreen
 
         private string _portalStatus = "";     // overlay line (main thread only)
         private string? _myPortalId;           // the portal this client placed (for Remove)
+        private readonly PortalWorld _portalWorld = new(); // renders a marker per reported portal
 
         /// <summary>Overlay status line for the shared-portal section.</summary>
         internal string PortalStatus() => _portal == null ? "" : _portalStatus;
@@ -93,6 +94,7 @@ namespace Stellar.WorldScreen
         private void SnapshotPortalHeartbeat(float dt)
         {
             if (_portal == null) return;
+            _portalWorld.Tick(GetActiveCamera()); // per-frame billboard of every portal marker
             _portalSnapTimer += dt;
             if (_portalSnapTimer < PortalSnapshotIntervalS) return;
             _portalSnapTimer = 0f;
@@ -110,6 +112,7 @@ namespace Stellar.WorldScreen
                 return;
             }
             _log.Info($"[WorldPortal] heartbeat ok — instance={result.InstanceId} portals={result.Portals.Count}");
+            _portalWorld.Apply(result.Portals); // render a marker for each reported portal
         }
 
         /// <summary>Overlay "Place portal here" (MAIN THREAD — button click): place a shared portal at the
@@ -183,6 +186,7 @@ namespace Stellar.WorldScreen
         private void DisposePortal()
         {
             try { _portalLoop?.Dispose(); } catch { /* best-effort */ }
+            try { _portalWorld.Destroy(); } catch { /* best-effort */ }
             try { _portalHttp?.Dispose(); } catch { /* best-effort */ }
             try { _installKey?.Dispose(); } catch { /* best-effort */ }
             _portalLoop = null; _portal = null; _portalHttp = null; _installKey = null;
