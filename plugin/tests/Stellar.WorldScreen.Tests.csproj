@@ -26,6 +26,8 @@
     <!-- The production files under test — compiled directly into this test assembly (not via
          ProjectReference to Stellar.WorldScreen.csproj, which pulls in Abstractions/InteropRefs). -->
     <Compile Include="../Net/WireCodec.cs" />
+    <Compile Include="../Net/PortalCanonical.cs" />
+    <Compile Include="../Net/PortalDtos.cs" />
     <Compile Include="../Screen/FrameSink.cs" />
     <Compile Include="../Identity/InstallKey.cs" />
     <Compile Include="../Identity/Es256.cs" />
