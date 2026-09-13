@@ -1,7 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Deliberately does NOT reference Stellar.Abstractions / Stellar.Plugin.InteropRefs / UnityEngine —
-       it compiles the WireCodec source directly (below) so the wire-protocol codec is unit-testable
-       off-game with plain `dotnet test`. See ../Net/WireCodec.cs's own header comment. -->
+  <!-- Compiles production sources directly (below) rather than via ProjectReference to
+       Stellar.WorldScreen.csproj, so most of the plugin stays unit-testable off-game with plain
+       `dotnet test` without pulling in Stellar.Plugin.InteropRefs / AVProVideo / UnityEngine.
+       Stellar.Abstractions IS referenced (Task 5, InstanceProbe) — it is a BCL-only contracts
+       assembly (no BepInEx/Unity/Harmony per CLAUDE.md's dependency rule), so it carries no Unity
+       dependency into this test project; only IClientState/IPlayerState/IEntityDetail/
+       IGameEnvironment/IGameData/EntityId/Position3D types are used, faked in InstanceProbeTests. -->
   <PropertyGroup>
     <TargetFramework>net6.0</TargetFramework>
     <Nullable>enable</Nullable>
@@ -21,10 +25,14 @@
          main plugin csproj — so the identity crypto is unit-testable off-game with plain `dotnet test`
          and the test itself can verify signatures via BouncyCastle (see InstallKeyTests.cs header). -->
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.0" />
+    <!-- Task 5 (InstanceProbe.Gather): BCL-only contracts assembly, matches the main plugin's pin.
+         2.9.0 is not yet published to NuGet — see Stellar.WorldScreen.csproj's comment for the local
+         pack/restore workaround; already seeded in the global package cache on this machine. -->
+    <PackageReference Include="Stellar.Abstractions" Version="2.9.0" />
   </ItemGroup>
   <ItemGroup>
     <!-- The production files under test — compiled directly into this test assembly (not via
-         ProjectReference to Stellar.WorldScreen.csproj, which pulls in Abstractions/InteropRefs). -->
+         ProjectReference to Stellar.WorldScreen.csproj, which pulls in InteropRefs/AVPro/Unity). -->
     <Compile Include="../Net/WireCodec.cs" />
     <Compile Include="../Net/PortalCanonical.cs" />
     <Compile Include="../Net/PortalDtos.cs" />
@@ -34,5 +42,6 @@
     <Compile Include="../Screen/FrameSink.cs" />
     <Compile Include="../Identity/InstallKey.cs" />
     <Compile Include="../Identity/Es256.cs" />
+    <Compile Include="../World/InstanceProbe.cs" />
   </ItemGroup>
 </Project>
