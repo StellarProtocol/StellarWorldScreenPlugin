@@ -20,11 +20,7 @@ public class InstanceProbeTests
         var visible = new List<long> { 111, 222 };
 
         var body = InstanceProbe.Assemble(
-            charId: 1234,
-            region: "sea",
-            mapId: 42,
-            sceneId: 7,
-            lineId: 3,
+            new InstanceKey(CharId: 1234, Region: "sea", MapId: 42, SceneId: 7, LineId: 3),
             pos: pos,
             visibleCharIds: visible,
             nonce: "abc");
@@ -49,14 +45,16 @@ public class InstanceProbeTests
     [Fact]
     public void Assemble_NoNonceGiven_DefaultsToNull()
     {
-        var body = InstanceProbe.Assemble(1, "sea", 1, 1, 0, Position3D.Zero, Array.Empty<long>());
+        var body = InstanceProbe.Assemble(
+            new InstanceKey(1, "sea", 1, 1, 0), Position3D.Zero, Array.Empty<long>());
         Assert.Null(body.Nonce);
     }
 
     [Fact]
     public void Assemble_EmptyVisibleCharIds_ProducesEmptyList_NoCrash()
     {
-        var body = InstanceProbe.Assemble(1, "sea", 1, 1, 0, Position3D.Zero, Array.Empty<long>());
+        var body = InstanceProbe.Assemble(
+            new InstanceKey(1, "sea", 1, 1, 0), Position3D.Zero, Array.Empty<long>());
         Assert.Empty(body.VisibleCharIds);
     }
 

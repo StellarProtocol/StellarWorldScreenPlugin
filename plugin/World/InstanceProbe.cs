@@ -6,6 +6,13 @@ using Stellar.WorldScreen.Net;
 namespace Stellar.WorldScreen.World;
 
 /// <summary>
+/// The instance-identity scalars for one heartbeat, grouped so <see cref="InstanceProbe.Assemble"/> stays
+/// within the project's ≤5-parameter guardrail (these five always travel together — they are the parts of
+/// the backend's <c>region:mapId:sceneId:lineId</c> instance key plus the reporting char).
+/// </summary>
+internal readonly record struct InstanceKey(long CharId, string Region, int MapId, int SceneId, int LineId);
+
+/// <summary>
 /// Assembles the backend heartbeat body (<see cref="HeartbeatBody"/>) that <c>PortalClient</c> sends
 /// every ~5s (see <c>PortalClient.Start</c>'s <c>gather</c> callback), from the framework's read APIs
 /// each tick.
@@ -30,21 +37,17 @@ internal static class InstanceProbe
     /// consistency, not signature correctness.)
     /// </summary>
     internal static HeartbeatBody Assemble(
-        long charId,
-        string region,
-        int mapId,
-        int sceneId,
-        int lineId,
+        InstanceKey key,
         Position3D pos,
         IReadOnlyList<long> visibleCharIds,
         string? nonce = null)
     {
         return new HeartbeatBody(
-            CharId: charId,
-            Region: region,
-            MapId: mapId,
-            SceneId: sceneId,
-            LineId: lineId,
+            CharId: key.CharId,
+            Region: key.Region,
+            MapId: key.MapId,
+            SceneId: key.SceneId,
+            LineId: key.LineId,
             PosX: PortalClient.RoundSignedCanonicalFloat(pos.X),
             PosY: PortalClient.RoundSignedCanonicalFloat(pos.Y),
             PosZ: PortalClient.RoundSignedCanonicalFloat(pos.Z),
@@ -98,14 +101,12 @@ internal static class InstanceProbe
 
         var visibleCharIds = MapVisibleCharIds(services.EntityDetail.GetVisiblePlayers());
 
-        return Assemble(
-            charId: player.CharId,
-            region: services.GameEnvironment.RegionCode,
-            mapId: mapId,
-            sceneId: sceneId.Value,
-            lineId: clientState.SceneLineId,
-            pos: player.Position,
-            visibleCharIds: visibleCharIds,
-            nonce: null);
+        var key = new InstanceKey(
+            CharId: player.CharId,
+            Region: services.GameEnvironment.RegionCode,
+            MapId: mapId,
+            SceneId: sceneId.Value,
+            LineId: clientState.SceneLineId);
+        return Assemble(key, player.Position, visibleCharIds, nonce: null);
     }
 }
