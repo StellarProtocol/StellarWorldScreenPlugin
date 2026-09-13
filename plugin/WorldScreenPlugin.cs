@@ -13,7 +13,7 @@ namespace Stellar.WorldScreen
     /// connects to it over localhost TCP, and paints the frames it streams onto a world-space screen placed
     /// in front of the player. Milestone-A scope: test-pattern source, auto-placed screen, no overlay yet.
     /// </summary>
-    public sealed class WorldScreenPlugin : IStellarPlugin
+    public sealed partial class WorldScreenPlugin : IStellarPlugin
     {
         private const string HelperHost = "127.0.0.1";
         private const int HelperPort = 47800;
@@ -99,6 +99,9 @@ namespace Stellar.WorldScreen
 
             _update = OnUpdate;
             _services.Framework.Update += _update;
+
+            // SP-1c: shared-portal backend wiring (independent of the video-source mode below).
+            InitPortal();
 
             if (UseAvPro)
             {
@@ -258,6 +261,8 @@ namespace Stellar.WorldScreen
         // Main-thread per-frame tick.
         private void OnUpdate(float dt)
         {
+            SnapshotPortalHeartbeat(dt); // main-thread snapshot for the portal heartbeat loop (SP-1c)
+
             if (UseAvPro) { UpdateAvPro(dt); return; }
 
             if (_sink.TryTakeLatest(out var w, out var h, out var buffer))
@@ -393,6 +398,7 @@ namespace Stellar.WorldScreen
         public void Dispose()
         {
             if (_update != null) { _services.Framework.Update -= _update; _update = null; }
+            try { DisposePortal(); } catch (Exception) { }
             try { _overlay.Remove(); } catch (Exception) { }
             try { _actionMenu?.Remove(); } catch (Exception) { }
             try { _fullscreen.Destroy(); } catch (Exception) { }
