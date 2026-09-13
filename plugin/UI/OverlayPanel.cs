@@ -16,18 +16,25 @@ namespace Stellar.WorldScreen.UI
         private readonly string[] _qualityLabels;   // e.g. ["360p","480p","720p"]
         private readonly Func<int> _currentQuality; // plugin's current quality index
         private readonly Action<int> _onQuality;    // the plugin's SetQuality(index)
+        private readonly Action? _onPlacePortal;    // SP-1c: place a shared portal here (null ⇒ no portal UI)
+        private readonly Action? _onRemovePortal;   // SP-1c: remove my shared portal
+        private readonly Func<string>? _portalStatus; // SP-1c: portal state line
         private readonly IWindowControl _control;
         private string _input = string.Empty;
         private string _status = "Helper: starting…";
 
         public OverlayPanel(IPluginServices services, Action<string> loadSource, Action<string> onControl,
-            string[] qualityLabels, Func<int> currentQuality, Action<int> onQuality, Func<bool>? shouldRender = null)
+            string[] qualityLabels, Func<int> currentQuality, Action<int> onQuality, Func<bool>? shouldRender = null,
+            Action? onPlacePortal = null, Action? onRemovePortal = null, Func<string>? portalStatus = null)
         {
             _load = loadSource;
             _onCmd = onControl;
             _qualityLabels = qualityLabels;
             _currentQuality = currentQuality;
             _onQuality = onQuality;
+            _onPlacePortal = onPlacePortal;
+            _onRemovePortal = onRemovePortal;
+            _portalStatus = portalStatus;
             var spec = new WindowSpec(
                 "worldscreen.overlay", "World Screen",
                 new WindowRect(40f, 120f, 320f, 0f),
@@ -47,8 +54,10 @@ namespace Stellar.WorldScreen.UI
         /// <summary>Removes the window.</summary>
         public void Remove() => _control.Remove();
 
-        private HudElement BuildRoot() => new ColumnElement(new HudElement[]
+        private HudElement BuildRoot()
         {
+            var baseRows = new HudElement[]
+            {
             new TextElement(() => _status),
             new SeparatorElement(),
             new TextElement(() => "Paste a video URL or file path:"),
@@ -82,8 +91,30 @@ namespace Stellar.WorldScreen.UI
                 new TextElement(() => "Quality:"),
                 new DropdownElement(_currentQuality, () => _qualityLabels, _onQuality, 90f),
             }, 6f),
-        }, 6f)
-        { Padding = 8 };
+            };
+            var portal = PortalSection();
+            var all = new HudElement[baseRows.Length + portal.Length];
+            Array.Copy(baseRows, all, baseRows.Length);
+            Array.Copy(portal, 0, all, baseRows.Length, portal.Length);
+            return new ColumnElement(all, 6f) { Padding = 8 };
+        }
+
+        // SP-1c: a shared-portal section, only when the plugin wired the callbacks (backend configured).
+        private HudElement[] PortalSection()
+        {
+            if (_onPlacePortal == null) return Array.Empty<HudElement>();
+            return new HudElement[]
+            {
+                new SeparatorElement(),
+                new TextElement(() => "Shared portal:"),
+                new TextElement(() => _portalStatus?.Invoke() ?? ""),
+                new RowElement(new HudElement[]
+                {
+                    new ButtonElement(() => "Place portal here", () => _onPlacePortal?.Invoke()),
+                    new ButtonElement(() => "Remove", () => _onRemovePortal?.Invoke()),
+                }, 6f),
+            };
+        }
 
         // InputElement fires this on Enter/blur; the Load button fires DoLoad directly.
         private void OnSubmit(string text)

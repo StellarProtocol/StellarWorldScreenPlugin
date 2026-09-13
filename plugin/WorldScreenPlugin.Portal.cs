@@ -1,5 +1,7 @@
 using System;
 using System.Net.Http;
+using System.Threading.Tasks;
+using UnityEngine;
 using Stellar.Abstractions.Services;
 using Stellar.WorldScreen.Identity;
 using Stellar.WorldScreen.Net;
@@ -43,6 +45,12 @@ namespace Stellar.WorldScreen
 
         // Main-thread snapshot the background loop reads. volatile for cross-thread visibility.
         private volatile HeartbeatBody? _latestHeartbeat;
+
+        private string _portalStatus = "";     // overlay line (main thread only)
+        private string? _myPortalId;           // the portal this client placed (for Remove)
+
+        /// <summary>Overlay status line for the shared-portal section.</summary>
+        internal string PortalStatus() => _portal == null ? "" : _portalStatus;
 
         /// <summary>Constructs the portal client + starts its heartbeat loop when a backend URL is configured.
         /// Fully guarded: any failure here logs and leaves the standalone video screen fully working.</summary>
@@ -102,6 +110,73 @@ namespace Stellar.WorldScreen
                 return;
             }
             _log.Info($"[WorldPortal] heartbeat ok — instance={result.InstanceId} portals={result.Portals.Count}");
+        }
+
+        /// <summary>Overlay "Place portal here" (MAIN THREAD — button click): place a shared portal at the
+        /// player's current position + instance with the current video source. On success the portal exists in
+        /// the backend registry and shows up in every co-located client's heartbeat.</summary>
+        internal void PlacePortalHere()
+        {
+            if (_portal == null) { _portalStatus = "backend off"; return; }
+            var hb = InstanceProbe.Gather(_services); // main thread (button click) — reads live game state
+            if (hb == null) { _portalStatus = "not in world"; return; }
+
+            var (kind, url) = ParsePortalSource(_currentSource);
+            var cam = GetActiveCamera();
+            double yaw = cam != null ? PortalClient.RoundSignedCanonicalFloat(cam.transform.eulerAngles.y) : 0.0;
+            var ownerName = _services.PlayerState.Name ?? "Player";
+
+            var body = new PlaceBody(
+                Region: hb.Region, MapId: hb.MapId, SceneId: hb.SceneId, LineId: hb.LineId,
+                PosX: hb.PosX, PosY: hb.PosY, PosZ: hb.PosZ, Yaw: yaw,
+                OwnerCharId: hb.CharId, SourceKind: kind, SourceUrl: url, Nonce: null);
+
+            _portalStatus = "placing…";
+            _portal.PlaceAsync(body, ownerName).ContinueWith(t =>
+            {
+                var r = t.Status == TaskStatus.RanToCompletion ? t.Result : null;
+                _services.Framework.Post(() =>
+                {
+                    if (r != null && r.Ok)
+                    {
+                        _myPortalId = r.PortalId;
+                        _portalStatus = "placed ✓";
+                        _log.Info($"[WorldPortal] placed portal {r.PortalId} @ ({hb.PosX},{hb.PosY},{hb.PosZ})");
+                    }
+                    else
+                    {
+                        _portalStatus = $"place failed: {r?.StatusCode.ToString() ?? "?"} {r?.Error ?? t.Exception?.Message ?? ""}";
+                        _log.Warning("[WorldPortal] " + _portalStatus);
+                    }
+                });
+            });
+        }
+
+        /// <summary>Overlay "Remove" (MAIN THREAD): remove the portal this client placed.</summary>
+        internal void RemoveMyPortal()
+        {
+            if (_portal == null || _myPortalId == null) { _portalStatus = "no portal to remove"; return; }
+            var id = _myPortalId;
+            var charId = _services.PlayerState.CharId;
+            _portalStatus = "removing…";
+            _portal.RemoveAsync(id, new DeleteBody(id, charId, null)).ContinueWith(t =>
+            {
+                var r = t.Status == TaskStatus.RanToCompletion ? t.Result : null;
+                _services.Framework.Post(() =>
+                {
+                    if (r != null && r.Ok) { _myPortalId = null; _portalStatus = "removed ✓"; }
+                    else { _portalStatus = $"remove failed: {r?.StatusCode.ToString() ?? "?"}"; }
+                });
+            });
+        }
+
+        // Maps the plugin's current video source spec to the portal's (kind, url). testpattern/unknown ⇒ no
+        // video (an empty prop) — a portal carries a URL/file source, not the local test pattern.
+        private static (string? kind, string? url) ParsePortalSource(string src)
+        {
+            if (src.StartsWith("url:", StringComparison.Ordinal)) return ("url", src.Substring(4));
+            if (src.StartsWith("file:", StringComparison.Ordinal)) return ("file", src.Substring(5));
+            return (null, null);
         }
 
         /// <summary>Tears down the portal loop + client. Safe to call when portals were never started.</summary>
