@@ -130,6 +130,7 @@ internal sealed partial class PortalClient
                     portals.Add(new PortalInfo(
                         PortalId: GetStr(p, "portalId") ?? string.Empty,
                         OwnerName: GetStr(p, "ownerName"),
+                        OwnerCharId: GetLongOr(p, "ownerCharId", 0),
                         PosX: px,
                         PosY: py,
                         PosZ: pz,

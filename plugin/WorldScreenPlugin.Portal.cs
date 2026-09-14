@@ -129,7 +129,27 @@ namespace Stellar.WorldScreen
             }
             _log.Info($"[WorldPortal] heartbeat ok — instance={result.InstanceId} portals={result.Portals.Count}");
             CaptureServerClock(result);          // SP-2b: refresh the local→server clock offset for viewer sync
+            ReclaimOwnPortal(result);            // SP-2b: re-adopt our own portal after a restart (DJ/Remove)
             _portalWorld.Apply(result.Portals);  // render a marker for each reported portal
+        }
+
+        // After a restart the client forgets it placed a portal (_myPortalId is null), so activating it makes the
+        // owner a mere VIEWER (dj=False) and Remove refuses. The heartbeat reports each portal's ownerCharId, so
+        // re-adopt the one owned by THIS character — restoring DJ + Remove rights without having to re-place.
+        private void ReclaimOwnPortal(HeartbeatResult result)
+        {
+            if (_myPortalId != null) return;
+            long myCharId = _services.PlayerState.CharId;
+            if (myCharId == 0) return;
+            foreach (var p in result.Portals)
+            {
+                if (p.OwnerCharId == myCharId)
+                {
+                    _myPortalId = p.PortalId;
+                    _log.Info($"[WorldPortal] re-claimed own portal {p.PortalId} (ownerCharId={myCharId})");
+                    break;
+                }
+            }
         }
 
         /// <summary>Main-thread per-frame (from <c>UpdateAvPro</c>): walk-up activation. Prompts the nearest

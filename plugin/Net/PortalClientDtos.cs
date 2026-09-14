@@ -29,6 +29,7 @@ namespace Stellar.WorldScreen.Net;
 internal sealed record PortalInfo(
     string PortalId,
     string? OwnerName,
+    long OwnerCharId,
     double PosX,
     double PosY,
     double PosZ,
