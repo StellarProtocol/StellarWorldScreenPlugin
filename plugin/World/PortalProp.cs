@@ -30,6 +30,7 @@ namespace Stellar.WorldScreen.World
         private const float ConeTopRM = 0.85f;       // cone glow half-width up top (narrower beacon)
         private const float ConeHM = 1.8f;           // cone height above the pedestal top (shorter beacon)
         private const float NameYM = PedTopYM + 0.7f; // name floats low, near the pedestal (not up high)
+        private const float NameWorldWidthM = 1.15f;  // name's fixed WORLD width — stays readable at any BeaconScale
 
         private const float BeaconScale = 0.34f;     // uniform shrink of the whole beacon (fits a ~1.4m ring)
         private static readonly Color Tint = new Color(0.42f, 0.92f, 1.0f, 1f); // bright cyan
@@ -160,6 +161,8 @@ namespace Stellar.WorldScreen.World
             // over the light. Only the text billboards.
             _emblemGo = WorldCanvas("Name", _facing.transform, 240, 90, 1.9f / 240f);
             _emblemGo.transform.localPosition = new Vector3(0f, NameYM, 0.001f);
+            // Counter the beacon shrink so the name keeps a fixed readable world size (240px wide canvas).
+            _emblemGo.transform.localScale = Vector3.one * (NameWorldWidthM / (240f * BeaconScale));
             var labelGo = new GameObject("Label");
             labelGo.transform.SetParent(_emblemGo.transform, false);
             _label = labelGo.AddComponent<Text>();
