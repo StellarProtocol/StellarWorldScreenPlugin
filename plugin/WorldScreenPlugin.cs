@@ -48,7 +48,6 @@ namespace Stellar.WorldScreen
         private bool _placed;
         private float _volTimer;
         private int _lastVolume = -1; // last volume sent to the helper (−1 = none yet), so we only send on change
-        private int _ytSlot;          // ping-pongs the download filename so we never overwrite the file AVPro holds open
 
         // Render-quality presets (label, width, height); the index is the overlay dropdown selection.
         private static readonly (string Label, int W, int H)[] Qualities =
@@ -146,18 +145,15 @@ namespace Stellar.WorldScreen
                 var url = sourceSpec.Substring(4);
                 if (IsDirectMedia(url)) { OpenAvPro(url); return; }
                 if (!_resolver.Available) { _overlay.SetStatus("yt-dlp missing"); return; }
-                // YouTube has no combined format and AVPro plays one source, so download+mux to a local mp4.
-                // Ping-pong the filename: overwriting the file AVPro currently has OPEN fails (Windows lock),
-                // which is why a quality change after a first successful load failed — write to the OTHER slot.
-                _overlay.SetStatus("Downloading…");
-                var selector = Net.YtDlpResolver.SelectorForHeight(Qualities[_quality].H);
-                _ytSlot ^= 1;
-                var outPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(_exePath) ?? ".", $"ytcache-{_ytSlot}.mp4");
-                _resolver.DownloadAsync(url, selector, outPath, ok => _services.Framework.Post(() =>
+                // STREAM, don't download: resolve the page URL to a DIRECT stream URL (best single format carrying
+                // both audio+video — auto quality) and hand it to AVPro, which buffers as it plays. Near-instant,
+                // and each client resolves the shared page URL itself (the temporary direct URL is never stored).
+                _overlay.SetStatus("Resolving stream…");
+                _resolver.ResolveStreamUrlAsync(url, Net.YtDlpResolver.BestStreamableSelector, direct => _services.Framework.Post(() =>
                 {
                     if (sourceSpec != _currentSource) return; // a newer Load superseded this one
-                    if (!ok) { _overlay.SetStatus("Download failed"); return; }
-                    OpenAvPro(outPath);
+                    if (string.IsNullOrEmpty(direct)) { _overlay.SetStatus("Stream resolve failed"); return; }
+                    OpenAvPro(direct!);
                 }));
             }
         }

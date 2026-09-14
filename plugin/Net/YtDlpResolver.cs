@@ -18,6 +18,7 @@ namespace Stellar.WorldScreen.Net;
 public sealed class YtDlpResolver
 {
     private const int TimeoutMs = 300000; // 5 min — long clips download slowly; a stuck job is abandoned
+    private const int ResolveTimeoutMs = 30000; // resolving a direct URL is fast (no download)
     private readonly string _ytdlpPath;
     private readonly string _ffmpegDir;
 
@@ -35,6 +36,68 @@ public sealed class YtDlpResolver
         $"bv*[height<={maxHeight}][vcodec^=avc1]+ba[acodec^=mp4a]/" +
         $"bv*[height<={maxHeight}][vcodec^=avc1]+ba/" +
         $"bv*[height<={maxHeight}]+ba/b[height<={maxHeight}]/b";
+
+    /// <summary>Selector for STREAMING (no download): the best SINGLE format that already carries both audio and
+    /// video — a progressive MP4 or an HLS/DASH variant AVPro can open directly — auto-picking the highest such
+    /// quality (never a separate-stream merge, which can't stream as one URL). Falls back to 18 (360p progressive,
+    /// nearly always present). Prefers avc1+mp4a, which MediaFoundation/AVPro decode most reliably.</summary>
+    public const string BestStreamableSelector =
+        "b[vcodec^=avc1][acodec^=mp4a]/b[acodec!=none][vcodec!=none]/18";
+
+    /// <summary>
+    /// Resolves <paramref name="url"/> to a DIRECT stream URL via <c>yt-dlp -g</c> (fast — no download). A
+    /// single-format selector yields exactly one URL; <paramref name="onDone"/> fires on a background thread
+    /// with that URL, or null on any failure. AVPro then streams it (buffering as it plays).
+    /// </summary>
+    public void ResolveStreamUrlAsync(string url, string formatSelector, Action<string?> onDone)
+    {
+        var t = new Thread(() => onDone(ResolveStreamUrl(url, formatSelector)))
+        {
+            IsBackground = true,
+            Name = "StellarWorldScreen.YtDlpResolve",
+        };
+        t.Start();
+    }
+
+    private string? ResolveStreamUrl(string url, string formatSelector)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = _ytdlpPath,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true, // -g prints the URL(s) to stdout; small output, safe to drain
+                WorkingDirectory = _ffmpegDir,
+            };
+            foreach (var a in new[] { "-g", "-f", formatSelector, "--no-playlist", url })
+            {
+                psi.ArgumentList.Add(a);
+            }
+
+            using var p = Process.Start(psi);
+            if (p == null) return null;
+            string outText = p.StandardOutput.ReadToEnd();
+            if (!p.WaitForExit(ResolveTimeoutMs))
+            {
+                try { p.Kill(entireProcessTree: true); } catch (Exception) { }
+                return null;
+            }
+            if (p.ExitCode != 0) return null;
+            // A single-format selector yields one URL; take the first non-empty line.
+            foreach (var line in outText.Split('\n'))
+            {
+                var u = line.Trim();
+                if (u.Length > 0) return u;
+            }
+            return null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// Downloads+muxes <paramref name="url"/> to <paramref name="outPath"/> (overwritten). <paramref name="onDone"/>
