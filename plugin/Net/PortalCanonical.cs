@@ -86,6 +86,19 @@ internal static class PortalCanonical
         Field(body.OwnerCharId),
         Field(body.Nonce));
 
+    /// <summary>`PATCH /portal/{id}/playback` canonical field order (CROSS-REPO INVARIANT):
+    /// <c>playback|portalId|index|positionMs|playing|nonce</c>. <c>playing</c> renders as <c>1</c>/<c>0</c>
+    /// (never true/false); the leading literal <c>"playback"</c> (raw, not escaped) keeps this canonical
+    /// from colliding with any other builder's output.</summary>
+    internal static string Playback(PlaybackBody body) => string.Join(
+        "|",
+        "playback",
+        Field(body.PortalId),
+        Field(body.Index),
+        Field(body.PositionMs),
+        Field(body.Playing ? 1 : 0),
+        Field(body.Nonce));
+
     /// <summary><c>visibleCharIds.map(String).join(",")</c> — canonical.ts joins the RAW (unescaped)
     /// values; numeric char ids never contain `\`/`|`, so this is safe.</summary>
     private static string JoinCharIds(IReadOnlyList<long> ids) =>

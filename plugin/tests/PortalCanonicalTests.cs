@@ -217,4 +217,21 @@ public class PortalCanonicalTests
 
         Assert.Equal("delete|portal-abc|1234|", PortalCanonical.Delete(body));
     }
+
+    // ---- Playback (SP-2b) ----
+
+    [Fact]
+    public void Playback_matches_backend_ground_truth_vector()
+    {
+        // Byte-match services/stellar-portal/docs/portal-canonical-vectors/playback.json
+        var body = new PlaybackBody(PortalId: "abc123", Index: 3, PositionMs: 128500, Playing: true, Nonce: "N");
+        Assert.Equal("playback|abc123|3|128500|1|N", PortalCanonical.Playback(body));
+    }
+
+    [Fact]
+    public void Playback_paused_is_zero_and_escapes_delimiters()
+    {
+        var body = new PlaybackBody("a|b", 0, 0, false, null);
+        Assert.Equal("playback|a\\|b|0|0|0|", PortalCanonical.Playback(body));
+    }
 }

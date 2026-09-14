@@ -76,3 +76,13 @@ internal sealed record DeleteBody(
     string PortalId,
     long OwnerCharId,
     string? Nonce);
+
+/// <summary>`PATCH /portal/{id}/playback` body (SP-2b) — the owner-DJ's playback state. Mirrors
+/// stellar-portal's `PlaybackBody`. <see cref="PortalId"/> comes from the URL path on the wire; it is
+/// still signed here as part of the canonical string.</summary>
+internal sealed record PlaybackBody(
+    string PortalId,
+    int Index,
+    long PositionMs,
+    bool Playing,
+    string? Nonce);
