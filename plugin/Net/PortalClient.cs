@@ -250,6 +250,34 @@ internal sealed partial class PortalClient
         return outcome.Ok ? PortalWriteResult.Success(outcome.Status) : PortalWriteResult.Failure(outcome.Status, outcome.Error);
     }
 
+    /// <summary>`PATCH /portal/{id}/playback` (SP-2b) — signed, owner-scoped. Reports the DJ's current
+    /// playback state. A 403 means the caller isn't the portal owner; a 404 means the backend predates
+    /// SP-2 (caller should then stop reporting and just play locally).</summary>
+    internal async Task<PortalWriteResult> SetPlaybackAsync(string portalId, PlaybackBody body)
+    {
+        if (string.IsNullOrEmpty(portalId)) return PortalWriteResult.Failure(0, "portalId is required");
+        string sig;
+        PlaybackBody signed;
+        try
+        {
+            signed = body with { PortalId = portalId, Nonce = NewNonce() };
+            sig = _key.SignInstall(PortalCanonical.Playback(signed));
+        }
+        catch (Exception ex) { return PortalWriteResult.Failure(0, $"sign error: {ex.Message}"); }
+
+        var wire = new
+        {
+            index = signed.Index,
+            positionMs = signed.PositionMs,
+            playing = signed.Playing,
+            nonce = signed.Nonce,
+            pubkey = _key.PubKeySpkiBase64,
+            sig,
+        };
+        var outcome = await SendAsync(HttpMethod.Patch, $"/portal/{Uri.EscapeDataString(portalId)}/playback", wire).ConfigureAwait(false);
+        return outcome.Ok ? PortalWriteResult.Success(outcome.Status) : PortalWriteResult.Failure(outcome.Status, outcome.Error);
+    }
+
     /// <summary>`POST /portal/{id}/watch` — deliberately UNAUTHENTICATED per docs/api.md ("Known
     /// deferrals" #2): no canonical, no pubkey/sig, no request body at all (the route doesn't read
     /// one).</summary>

@@ -310,6 +310,60 @@ public class PortalClientTests
         Assert.Equal(key.SignInstall(expected), root.GetProperty("sig").GetString());
     }
 
+    // ---- SetPlaybackAsync ----
+
+    [Fact]
+    public async Task SetPlaybackAsync_PatchesPortalId_SignsPlaybackCanonical()
+    {
+        var key = NewKey();
+        var stub = new StubHandler(_ => Json(HttpStatusCode.OK, "{\"ok\":true}"));
+        var client = MakeClient(stub, key);
+
+        // A deliberately mismatched body.PortalId — SetPlaybackAsync must sign/URL against the
+        // EXPLICIT portalId argument, never trust a possibly-stale value carried on the body (mirrors
+        // RemoveAsync's same guarantee).
+        var body = new PlaybackBody(PortalId: "stale-id", Index: 3, PositionMs: 128500, Playing: true, Nonce: null);
+        var result = await client.SetPlaybackAsync("p1", body);
+
+        Assert.True(result.Ok);
+        var req = Assert.Single(stub.Requests);
+        Assert.Equal(HttpMethod.Patch, req.Method);
+        Assert.Equal("http://localhost:9999/portal/p1/playback", req.Url);
+
+        using var doc = JsonDocument.Parse(req.Body!);
+        var root = doc.RootElement;
+        Assert.Equal(3, root.GetProperty("index").GetInt32());
+        Assert.Equal(128500, root.GetProperty("positionMs").GetInt64());
+        Assert.True(root.GetProperty("playing").GetBoolean());
+        Assert.Equal(key.PubKeySpkiBase64, root.GetProperty("pubkey").GetString());
+        Assert.False(root.TryGetProperty("portalId", out _)); // portalId is a URL segment, not a body field
+
+        var nonce = root.GetProperty("nonce").GetString();
+        Assert.False(string.IsNullOrEmpty(nonce));
+
+        // The load-bearing assertion: sig is over the EXACT canonical of the EXACT body sent (URL
+        // portalId, not the stale body one), built with the SAME nonce that traveled in the body.
+        var expectedCanonical = PortalCanonical.Playback(new PlaybackBody("p1", 3, 128500, true, nonce));
+        var expectedSig = key.SignInstall(expectedCanonical);
+        Assert.Equal(expectedSig, root.GetProperty("sig").GetString());
+    }
+
+    [Fact]
+    public async Task SetPlaybackAsync_NonSuccessStatus_ReturnsTypedFailure_NeverThrows()
+    {
+        var key = NewKey();
+        var stub = new StubHandler(_ => Json(HttpStatusCode.NotFound, "{\"error\":\"not found\"}"));
+        var client = MakeClient(stub, key);
+        var body = new PlaybackBody("p1", 0, 0, false, null);
+
+        var ex = await Record.ExceptionAsync(() => client.SetPlaybackAsync("p1", body));
+        Assert.Null(ex);
+
+        var result = await client.SetPlaybackAsync("p1", body);
+        Assert.False(result.Ok);
+        Assert.Equal(404, result.StatusCode);
+    }
+
     // ---- WatchAsync (unauthenticated) ----
 
     [Fact]
