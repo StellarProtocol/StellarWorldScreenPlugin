@@ -56,6 +56,7 @@ namespace Stellar.WorldScreen
         private const float DeactivateRangeM = 9f;   // auto-hide the screen once the player walks past this
         private const KeyCode ActivateKey = KeyCode.F;
         private string? _activePortalId;             // the portal whose screen is up (null = none active)
+        private bool _fWasDown;                      // previous-frame F state, for our own edge detection
 
         /// <summary>Overlay status line for the shared-portal section.</summary>
         internal string PortalStatus() => _portal == null ? "" : _portalStatus;
@@ -130,6 +131,16 @@ namespace Stellar.WorldScreen
             var pp = _services.PlayerState.Position;
             var player = new Vector3(pp.X, pp.Y, pp.Z);
 
+            // Edge-detect F ourselves from GetKey (stays true the whole hold) instead of GetKeyDown (true for one
+            // Unity-input frame only, which the plugin's tick can miss — the 'sometimes it works' bug).
+            bool fNow = Input.GetKey(ActivateKey);
+            bool fPressed = fNow && !_fWasDown;
+            _fWasDown = fNow;
+
+            var nearest = _portalWorld.FindNearest(player, out float nearDist);
+            if (fPressed)
+                _log.Info($"[WorldPortal] F — active={_activePortalId ?? "none"} nearest={nearest ?? "none"} dist={nearDist:F1}m range={ActivateRangeM}m");
+
             if (_activePortalId != null)
             {
                 if (_portalWorld.TryGetInfo(_activePortalId, out var act))
@@ -138,7 +149,7 @@ namespace Stellar.WorldScreen
                     _screen.PlaceAtBeacon(beacon, player);
                     _screen.SetVisible(true);
                     _playerNear = true;                       // gates the proximity action menu (play/pause/fullscreen)
-                    if (GroundDist(beacon, player) > DeactivateRangeM || Input.GetKeyDown(ActivateKey)) Deactivate();
+                    if (GroundDist(beacon, player) > DeactivateRangeM || fPressed) Deactivate();
                 }
                 else Deactivate();                            // the active portal vanished (lease expired / removed)
                 _portalWorld.SetPromptOn(null);
@@ -148,11 +159,10 @@ namespace Stellar.WorldScreen
             // No active portal → screen hidden. Prompt the nearest beacon in range; F activates it.
             _screen.SetVisible(false);
             _playerNear = false;
-            var nearest = _portalWorld.FindNearest(player, out float nearDist);
             if (nearest != null && nearDist <= ActivateRangeM)
             {
                 _portalWorld.SetPromptOn(nearest);
-                if (Input.GetKeyDown(ActivateKey)) Activate(nearest);
+                if (fPressed) Activate(nearest);
             }
             else
             {
@@ -170,7 +180,7 @@ namespace Stellar.WorldScreen
             var spec = SourceSpecFor(info);
             if (spec != _currentSource) LoadSource(spec); // different content → load it; same → show what's playing
             _lastVolume = -1; // force distance volume to re-apply for the newly shown screen
-            _log.Info($"[WorldPortal] activated {portalId} (source={info.SourceKind ?? "none"})");
+            _log.Info($"[WorldPortal] activated {portalId} (source={info.SourceKind ?? "none"}, screenExists={_screen.Exists}, tex={_avpro.CurrentTexture() != null}, playing={_avpro.IsPlaying})");
         }
 
         // Hides the screen and mutes audio (playback keeps running muted so re-activation is instant).
