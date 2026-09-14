@@ -43,5 +43,6 @@
     <Compile Include="../Identity/InstallKey.cs" />
     <Compile Include="../Identity/Es256.cs" />
     <Compile Include="../World/InstanceProbe.cs" />
+    <Compile Include="../World/PortalPlaylist.cs" />
   </ItemGroup>
 </Project>
