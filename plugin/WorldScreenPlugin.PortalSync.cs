@@ -39,11 +39,12 @@ namespace Stellar.WorldScreen
 
         private static long PortalNowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        /// <summary>Overlay "Add to playlist" (main thread): append the currently-loaded video to the draft.</summary>
-        internal void AddCurrentToPlaylist()
+        /// <summary>Overlay "Add to playlist" (main thread): append the input-box URL/path (a "url:"/"file:"
+        /// spec) to the draft — no need to Load it first.</summary>
+        internal void AddToPlaylist(string spec)
         {
-            var (kind, url) = ParsePortalSource(_currentSource);
-            if (kind == null || string.IsNullOrEmpty(url)) { _portalStatus = "load a URL/file first, then Add"; return; }
+            var (kind, url) = ParsePortalSource(spec);
+            if (kind == null || string.IsNullOrEmpty(url)) { _portalStatus = "enter a URL/path to add"; return; }
             _draftPlaylist.Add(new PlaylistItem(url!, kind!, null));
             _portalStatus = $"playlist: {_draftPlaylist.Count} video(s)";
         }

@@ -19,7 +19,7 @@ namespace Stellar.WorldScreen.UI
         private readonly Action? _onPlacePortal;    // SP-1c: place a shared portal here (null ⇒ no portal UI)
         private readonly Action? _onRemovePortal;   // SP-1c: remove my shared portal
         private readonly Func<string>? _portalStatus; // SP-1c: portal state line
-        private readonly Action? _onAddToPlaylist;  // SP-2b: append the current video to the draft playlist
+        private readonly Action<string>? _onAddToPlaylist; // SP-2b: append the input-box URL/path to the draft playlist
         private readonly Action? _onClearPlaylist;  // SP-2b: clear the draft playlist
         private readonly Func<string>? _playlistStatus; // SP-2b: draft playlist line
         private readonly IWindowControl _control;
@@ -29,7 +29,7 @@ namespace Stellar.WorldScreen.UI
         public OverlayPanel(IPluginServices services, Action<string> loadSource, Action<string> onControl,
             string[] qualityLabels, Func<int> currentQuality, Action<int> onQuality, Func<bool>? shouldRender = null,
             Action? onPlacePortal = null, Action? onRemovePortal = null, Func<string>? portalStatus = null,
-            Action? onAddToPlaylist = null, Action? onClearPlaylist = null, Func<string>? playlistStatus = null)
+            Action<string>? onAddToPlaylist = null, Action? onClearPlaylist = null, Func<string>? playlistStatus = null)
         {
             _load = loadSource;
             _onCmd = onControl;
@@ -118,7 +118,7 @@ namespace Stellar.WorldScreen.UI
                 new TextElement(() => _playlistStatus?.Invoke() ?? ""),
                 new RowElement(new HudElement[]
                 {
-                    new ButtonElement(() => "Add to playlist", () => _onAddToPlaylist?.Invoke()),
+                    new ButtonElement(() => "Add to playlist", DoAddToPlaylist),
                     new ButtonElement(() => "Clear list", () => _onClearPlaylist?.Invoke()),
                 }, 6f),
                 new RowElement(new HudElement[]
@@ -136,13 +136,29 @@ namespace Stellar.WorldScreen.UI
             DoLoad();
         }
 
-        private void DoLoad()
+        // Turns the input box into a source spec ("url:<url>" / "file:<path>"), or null when empty.
+        private string? SpecFromInput()
         {
             var v = (_input ?? string.Empty).Trim();
-            if (v.Length == 0) return;
+            if (v.Length == 0) return null;
             var isUrl = v.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
                         || v.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
-            _load(isUrl ? "url:" + v : "file:" + v);
+            return isUrl ? "url:" + v : "file:" + v;
+        }
+
+        private void DoLoad()
+        {
+            var spec = SpecFromInput();
+            if (spec != null) _load(spec);
+        }
+
+        // "Add to playlist": append the input-box URL/path to the draft, then clear the box for the next paste.
+        private void DoAddToPlaylist()
+        {
+            var spec = SpecFromInput();
+            if (spec == null) return;
+            _onAddToPlaylist?.Invoke(spec);
+            _input = string.Empty;
         }
     }
 }
