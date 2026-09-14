@@ -31,6 +31,7 @@ namespace Stellar.WorldScreen.World
         private const float ConeHM = 1.8f;           // cone height above the pedestal top (shorter beacon)
         private const float NameYM = PedTopYM + 0.7f; // name floats low, near the pedestal (not up high)
 
+        private const float BeaconScale = 0.70f;     // uniform shrink of the whole beacon
         private static readonly Color Tint = new Color(0.42f, 0.92f, 1.0f, 1f); // bright cyan
         private const int MoteCount = 4;
 
@@ -117,6 +118,7 @@ namespace Stellar.WorldScreen.World
         {
             if (_root != null) return;
             _root = new GameObject("StellarPortalBeacon");
+            _root.transform.localScale = Vector3.one * BeaconScale; // shrink the whole beacon uniformly
             UnityEngine.Object.DontDestroyOnLoad(_root);
 
             // Faint flat floor glyph, lying in the ground plane, under the 3D wall.
@@ -240,10 +242,11 @@ namespace Stellar.WorldScreen.World
                 float c = (N - 1) / 2f, R = (N / 2f) - 2f;
                 float d = Mathf.Sqrt((x - c) * (x - c) + (y - c) * (y - c)) / R;
                 if (d > 1f) return 0f;
-                float rim = Mathf.Exp(-Mathf.Pow((d - 0.96f) / 0.030f, 2f));         // outer rim
-                float inner = Mathf.Exp(-Mathf.Pow((d - 0.62f) / 0.020f, 2f)) * 0.5f; // faint inner ring
-                float fill = (1f - d) * 0.10f;                                        // soft disc glow
-                return Mathf.Clamp01(rim + inner + fill);
+                float rim = Mathf.Exp(-Mathf.Pow((d - 0.88f) / 0.060f, 2f));         // soft, wide outer rim (pulled in)
+                float inner = Mathf.Exp(-Mathf.Pow((d - 0.58f) / 0.030f, 2f)) * 0.4f; // faint inner ring
+                float fill = (1f - d) * 0.08f;                                        // soft disc glow
+                float outerFade = Mathf.Clamp01((1f - d) / 0.18f);                    // long taper to nothing at the edge
+                return Mathf.Clamp01((rim + inner + fill) * outerFade);
             });
             return _floor;
         }
@@ -261,7 +264,8 @@ namespace Stellar.WorldScreen.World
                 float rise = Mathf.Exp(-up * 2.4f);                              // bright at the ground, fading up
                 float baseLine = Mathf.Exp(-Mathf.Pow((up - 0.05f) / 0.06f, 2f)); // soft bright line at the foot
                 float edge = Mathf.Exp(-Mathf.Pow(fx * 1.15f, 2f));            // soft Gaussian sides → seamless ring
-                return Mathf.Clamp01(edge * (0.8f * rise + 0.85f * baseLine));
+                float topFade = Mathf.Clamp01((1f - up) / 0.3f);              // fade the top 30% to zero → no hard top edge
+                return Mathf.Clamp01(edge * (0.8f * rise + 0.85f * baseLine) * topFade);
             });
             return _wall;
         }
