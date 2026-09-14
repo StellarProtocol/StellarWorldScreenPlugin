@@ -66,6 +66,13 @@ namespace Stellar.WorldScreen.Screen
             if (_mp != null) _mp.AudioVolume = Mathf.Clamp01(v);
         }
 
+        /// <summary>Enables/disables looping. Single-source portals loop; a multi-item playlist turns
+        /// looping OFF so the video ENDS (letting the DJ auto-advance to the next item) instead of repeating.</summary>
+        public void SetLoop(bool loop)
+        {
+            if (_mp != null) _mp.Loop = loop;
+        }
+
         /// <summary>Current playback volume in [0,1].</summary>
         public float Volume => (_mp != null && _mp.Control != null) ? _mp.Control.GetVolume() : 1f;
 

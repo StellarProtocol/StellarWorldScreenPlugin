@@ -73,6 +73,7 @@ namespace Stellar.WorldScreen
                 _activateAction = _services.Hotkeys.DeclareAction(
                     new HotkeyAction("worldportal.activate", "Activate nearby portal (watch)", new KeyBinding(StellarKeyCode.F)),
                     callback: () => _activateRequested = true);
+                DeclareDjHotkeys(); // SP-2b: next/prev for when the player DJs their own portal
 
                 var prefs = _services.Config.GetSection(PortalConfigSection);
                 var baseUrl = prefs.Get<string>(PortalBackendUrlKey, DefaultPortalBackendUrl);
@@ -127,7 +128,8 @@ namespace Stellar.WorldScreen
                 return;
             }
             _log.Info($"[WorldPortal] heartbeat ok — instance={result.InstanceId} portals={result.Portals.Count}");
-            _portalWorld.Apply(result.Portals); // render a marker for each reported portal
+            CaptureServerClock(result);          // SP-2b: refresh the local→server clock offset for viewer sync
+            _portalWorld.Apply(result.Portals);  // render a marker for each reported portal
         }
 
         /// <summary>Main-thread per-frame (from <c>UpdateAvPro</c>): walk-up activation. Prompts the nearest
@@ -156,6 +158,7 @@ namespace Stellar.WorldScreen
                     _screen.SetVisible(true);
                     _playerNear = true;                       // gates the proximity action menu (play/pause/fullscreen)
                     if (GroundDist(beacon, player) > DeactivateRangeM || pressed) Deactivate();
+                    else UpdatePlaybackSync(act, dt);         // SP-2b: DJ drives / viewer follows synced playback
                 }
                 else Deactivate();                            // the active portal vanished (lease expired / removed)
                 _portalWorld.SetPromptOn(null);
@@ -165,6 +168,7 @@ namespace Stellar.WorldScreen
             // No active portal → screen hidden. Prompt the nearest beacon in range; the key activates it.
             _screen.SetVisible(false);
             _playerNear = false;
+            _nextRequested = _prevRequested = false;          // drop any DJ next/prev presses made while not DJing
             if (nearest != null && nearDist <= ActivateRangeM)
             {
                 _portalWorld.SetPromptOn(nearest);
@@ -177,16 +181,16 @@ namespace Stellar.WorldScreen
             }
         }
 
-        // Raises the screen on a portal: load its source (bundled clip if it has none). AVPro is kept playing
-        // even while hidden (never paused), so a decoded frame is always ready and the screen shows instantly.
+        // Raises the screen on a portal: sets up its playlist + DJ/viewer role (SP-2b) and loads the current
+        // item. AVPro is kept playing even while hidden, so a decoded frame is always ready and the screen shows
+        // the instant you activate.
         private void Activate(string portalId)
         {
             if (!_portalWorld.TryGetInfo(portalId, out var info)) return;
             _activePortalId = portalId;
-            var spec = SourceSpecFor(info);
-            if (spec != _currentSource) LoadSource(spec); // different content → load it; same → show what's playing
+            OnActivatePlayback(info);
             _lastVolume = -1; // force distance volume to re-apply for the newly shown screen
-            _log.Info($"[WorldPortal] activated {portalId} (source={info.SourceKind ?? "none"}, screenExists={_screen.Exists}, tex={_avpro.CurrentTexture() != null}, playing={_avpro.IsPlaying})");
+            _log.Info($"[WorldPortal] activated {portalId} (dj={_myPortalId == portalId}, items={_activePlaylist.Count}, kind={info.SourceKind ?? "none"})");
         }
 
         // Hides the screen and mutes audio (playback keeps running muted so re-activation is instant).
@@ -198,17 +202,6 @@ namespace Stellar.WorldScreen
             if (_fullscreen.Visible) _fullscreen.Hide();
             _avpro.SetVolume(0f); _lastVolume = 0;
             _log.Info("[WorldPortal] deactivated");
-        }
-
-        // Maps a portal's stored source to a LoadSource spec; a portal with no source shows the bundled clip.
-        private static string SourceSpecFor(PortalInfo info)
-        {
-            if (!string.IsNullOrEmpty(info.Source))
-            {
-                if (info.SourceKind == "url") return "url:" + info.Source;
-                if (info.SourceKind == "file") return "file:" + info.Source;
-            }
-            return "testpattern";
         }
 
         private static float GroundDist(Vector3 a, Vector3 b)
@@ -226,7 +219,12 @@ namespace Stellar.WorldScreen
             var hb = InstanceProbe.Gather(_services); // main thread (button click) — reads live game state
             if (hb == null) { _portalStatus = "not in world"; return; }
 
-            var (kind, url) = ParsePortalSource(_currentSource);
+            // SP-2b: a built-up draft playlist places as sourceKind="playlist" (JSON in sourceUrl); otherwise
+            // the single current source (SP-1 behaviour).
+            string? kind, url;
+            if (_draftPlaylist.Count > 0) { kind = "playlist"; url = PortalPlaylist.Serialize(_draftPlaylist); }
+            else { (kind, url) = ParsePortalSource(_currentSource); }
+
             var cam = GetActiveCamera();
             double yaw = cam != null ? PortalClient.RoundSignedCanonicalFloat(cam.transform.eulerAngles.y) : 0.0;
             var ownerName = _services.PlayerState.Name ?? "Player";
@@ -288,6 +286,7 @@ namespace Stellar.WorldScreen
         private void DisposePortal()
         {
             try { _activateAction?.Dispose(); } catch { /* best-effort */ }
+            try { DisposeDjHotkeys(); } catch { /* best-effort */ }
             try { _portalLoop?.Dispose(); } catch { /* best-effort */ }
             try { _portalWorld.Destroy(); } catch { /* best-effort */ }
             try { _portalHttp?.Dispose(); } catch { /* best-effort */ }

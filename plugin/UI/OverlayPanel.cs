@@ -19,13 +19,17 @@ namespace Stellar.WorldScreen.UI
         private readonly Action? _onPlacePortal;    // SP-1c: place a shared portal here (null ⇒ no portal UI)
         private readonly Action? _onRemovePortal;   // SP-1c: remove my shared portal
         private readonly Func<string>? _portalStatus; // SP-1c: portal state line
+        private readonly Action? _onAddToPlaylist;  // SP-2b: append the current video to the draft playlist
+        private readonly Action? _onClearPlaylist;  // SP-2b: clear the draft playlist
+        private readonly Func<string>? _playlistStatus; // SP-2b: draft playlist line
         private readonly IWindowControl _control;
         private string _input = string.Empty;
         private string _status = "Helper: starting…";
 
         public OverlayPanel(IPluginServices services, Action<string> loadSource, Action<string> onControl,
             string[] qualityLabels, Func<int> currentQuality, Action<int> onQuality, Func<bool>? shouldRender = null,
-            Action? onPlacePortal = null, Action? onRemovePortal = null, Func<string>? portalStatus = null)
+            Action? onPlacePortal = null, Action? onRemovePortal = null, Func<string>? portalStatus = null,
+            Action? onAddToPlaylist = null, Action? onClearPlaylist = null, Func<string>? playlistStatus = null)
         {
             _load = loadSource;
             _onCmd = onControl;
@@ -35,6 +39,9 @@ namespace Stellar.WorldScreen.UI
             _onPlacePortal = onPlacePortal;
             _onRemovePortal = onRemovePortal;
             _portalStatus = portalStatus;
+            _onAddToPlaylist = onAddToPlaylist;
+            _onClearPlaylist = onClearPlaylist;
+            _playlistStatus = playlistStatus;
             var spec = new WindowSpec(
                 "worldscreen.overlay", "World Screen",
                 new WindowRect(40f, 120f, 320f, 0f),
@@ -108,6 +115,12 @@ namespace Stellar.WorldScreen.UI
                 new SeparatorElement(),
                 new TextElement(() => "Shared portal:"),
                 new TextElement(() => _portalStatus?.Invoke() ?? ""),
+                new TextElement(() => _playlistStatus?.Invoke() ?? ""),
+                new RowElement(new HudElement[]
+                {
+                    new ButtonElement(() => "Add to playlist", () => _onAddToPlaylist?.Invoke()),
+                    new ButtonElement(() => "Clear list", () => _onClearPlaylist?.Invoke()),
+                }, 6f),
                 new RowElement(new HudElement[]
                 {
                     new ButtonElement(() => "Place portal here", () => _onPlacePortal?.Invoke()),

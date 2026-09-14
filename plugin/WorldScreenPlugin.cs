@@ -73,7 +73,8 @@ namespace Stellar.WorldScreen
             _resolver = new Net.YtDlpResolver(System.IO.Path.Combine(slotDir, "yt-dlp.exe"), slotDir);
             _overlay = new UI.OverlayPanel(services, LoadSource, HandleControl, QualityLabels(), () => _quality, SetQuality,
                 shouldRender: () => !_fullscreen.Visible,
-                onPlacePortal: PlacePortalHere, onRemovePortal: RemoveMyPortal, portalStatus: PortalStatus);
+                onPlacePortal: PlacePortalHere, onRemovePortal: RemoveMyPortal, portalStatus: PortalStatus,
+                onAddToPlaylist: AddCurrentToPlaylist, onClearPlaylist: ClearDraftPlaylist, playlistStatus: PlaylistStatus);
             _actionMenu = new UI.ActionMenu(
                 services,
                 // Proximity menu only — full-screen has its own on-canvas control bar above the video.
