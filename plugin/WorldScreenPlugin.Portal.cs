@@ -50,6 +50,13 @@ namespace Stellar.WorldScreen
         private string? _myPortalId;           // the portal this client placed (for Remove)
         private readonly PortalWorld _portalWorld = new(); // renders a marker per reported portal
 
+        // Walk-up activation (SP-1c): the video screen appears above a placed beacon ONLY when the player
+        // activates it (press F within range); no auto-placed personal screen.
+        private const float ActivateRangeM = 4f;    // show the prompt + accept F within this ground distance
+        private const float DeactivateRangeM = 9f;   // auto-hide the screen once the player walks past this
+        private const KeyCode ActivateKey = KeyCode.F;
+        private string? _activePortalId;             // the portal whose screen is up (null = none active)
+
         /// <summary>Overlay status line for the shared-portal section.</summary>
         internal string PortalStatus() => _portal == null ? "" : _portalStatus;
 
@@ -113,6 +120,89 @@ namespace Stellar.WorldScreen
             }
             _log.Info($"[WorldPortal] heartbeat ok — instance={result.InstanceId} portals={result.Portals.Count}");
             _portalWorld.Apply(result.Portals); // render a marker for each reported portal
+        }
+
+        /// <summary>Main-thread per-frame (from <c>UpdateAvPro</c>): walk-up activation. Prompts the nearest
+        /// beacon in range; F raises the screen on it (loading its source); walking away or pressing F again
+        /// hides it. Only one portal is active at a time; activation is local to this viewer.</summary>
+        private void UpdatePortalActivation(float dt)
+        {
+            var pp = _services.PlayerState.Position;
+            var player = new Vector3(pp.X, pp.Y, pp.Z);
+
+            if (_activePortalId != null)
+            {
+                if (_portalWorld.TryGetInfo(_activePortalId, out var act))
+                {
+                    var beacon = new Vector3((float)act.PosX, (float)act.PosY, (float)act.PosZ);
+                    _screen.PlaceAtBeacon(beacon, player);
+                    _screen.SetVisible(true);
+                    _playerNear = true;                       // gates the proximity action menu (play/pause/fullscreen)
+                    if (GroundDist(beacon, player) > DeactivateRangeM || Input.GetKeyDown(ActivateKey)) Deactivate();
+                }
+                else Deactivate();                            // the active portal vanished (lease expired / removed)
+                _portalWorld.SetPromptOn(null);
+                return;
+            }
+
+            // No active portal → screen hidden. Prompt the nearest beacon in range; F activates it.
+            _screen.SetVisible(false);
+            _playerNear = false;
+            var nearest = _portalWorld.FindNearest(player, out float nearDist);
+            if (nearest != null && nearDist <= ActivateRangeM)
+            {
+                _portalWorld.SetPromptOn(nearest);
+                if (Input.GetKeyDown(ActivateKey)) Activate(nearest);
+            }
+            else
+            {
+                _portalWorld.SetPromptOn(null);
+                if (_lastVolume != 0) { _avpro.SetVolume(0f); _lastVolume = 0; } // mute the preloaded clip while idle
+            }
+        }
+
+        // Raises the screen on a portal: load its source (bundled clip if it has none) and show it at the beacon.
+        private void Activate(string portalId)
+        {
+            if (!_portalWorld.TryGetInfo(portalId, out var info)) return;
+            _activePortalId = portalId;
+            var spec = SourceSpecFor(info);
+            if (spec == _currentSource && _avpro.Exists)
+            {
+                if (!_avpro.IsPlaying) _avpro.TogglePause(); // same source — resume from where it paused
+            }
+            else LoadSource(spec);
+            _lastVolume = -1; // force distance volume to re-apply for the newly shown screen
+            _log.Info($"[WorldPortal] activated {portalId} (source={info.SourceKind ?? "none"})");
+        }
+
+        // Hides the screen and pauses playback (no audio/decode while nothing is being watched).
+        private void Deactivate()
+        {
+            _activePortalId = null;
+            _screen.SetVisible(false);
+            _playerNear = false;
+            if (_fullscreen.Visible) _fullscreen.Hide();
+            if (_avpro.IsPlaying) _avpro.TogglePause();
+            _avpro.SetVolume(0f); _lastVolume = 0;
+            _log.Info("[WorldPortal] deactivated");
+        }
+
+        // Maps a portal's stored source to a LoadSource spec; a portal with no source shows the bundled clip.
+        private static string SourceSpecFor(PortalInfo info)
+        {
+            if (!string.IsNullOrEmpty(info.Source))
+            {
+                if (info.SourceKind == "url") return "url:" + info.Source;
+                if (info.SourceKind == "file") return "file:" + info.Source;
+            }
+            return "testpattern";
+        }
+
+        private static float GroundDist(Vector3 a, Vector3 b)
+        {
+            float dx = a.x - b.x, dz = a.z - b.z;
+            return Mathf.Sqrt(dx * dx + dz * dz);
         }
 
         /// <summary>Overlay "Place portal here" (MAIN THREAD — button click): place a shared portal at the

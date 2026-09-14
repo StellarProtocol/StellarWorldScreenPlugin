@@ -283,7 +283,7 @@ namespace Stellar.WorldScreen
             if (!_avproInitDone)
             {
                 _avproInitDone = true;
-                LoadSource(ResolveInitialSource()); // silent bundled clip until the user loads a URL/file
+                LoadSource(ResolveInitialSource()); // preload the silent clip; screen stays HIDDEN until a portal is activated
                 return;
             }
 
@@ -294,25 +294,20 @@ namespace Stellar.WorldScreen
             if (w <= 0 || h <= 0) { w = tex.width; h = tex.height; }
             if (w <= 0 || h <= 0) return;
 
-            _screen.ShowVideoPlayer(_avpro.Player, w, h); // AVPro DisplayUGUI (correct colour), not a raw texture
-            if (!_placed)
+            _screen.ShowVideoPlayer(_avpro.Player, w, h); // bind AVPro's DisplayUGUI (visibility is driven by activation)
+
+            // Portal walk-up activation drives whether/where the screen shows (SP-1c): the screen appears ONLY
+            // when the player activates a nearby portal — there is no auto-placed personal screen.
+            UpdatePortalActivation(dt);
+
+            if (_fullscreen.Visible)
             {
-                if (IsInWorld()) PlaceScreen();
-                else _screen.SetVisible(false);
+                _fullscreen.Tick(dt);
+                if (Input.GetKeyDown(KeyCode.Escape)) _fullscreen.Hide(); // always-available exit fallback
             }
-            if (_placed)
+            else if (_activePortalId != null)
             {
-                var dist = ScreenDistance();
-                _playerNear = dist >= 0f && dist <= InteractRadius; // gates the proximity menu (ShouldRender)
-                if (_fullscreen.Visible)
-                {
-                    _fullscreen.Tick(dt); // DisplayUGUI renders the video itself; this drives the bar + auto-hide
-                    if (Input.GetKeyDown(KeyCode.Escape)) _fullscreen.Hide(); // always-available exit fallback
-                }
-                else
-                {
-                    PumpVolume(dt); // distance volume only when NOT full-screen (full-screen = full volume + mute)
-                }
+                PumpVolume(dt); // distance volume relative to the activated beacon (the screen sits on it)
             }
         }
 

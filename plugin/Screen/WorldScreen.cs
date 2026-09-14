@@ -113,6 +113,23 @@ namespace Stellar.WorldScreen.Screen
             _root.transform.rotation = Quaternion.LookRotation(fwd, Vector3.up);
         }
 
+        /// <summary>
+        /// Positions the screen <paramref name="height"/> metres above <paramref name="beaconPos"/> (a placed
+        /// portal), facing <paramref name="viewer"/> — for portal walk-up activation, where the screen belongs
+        /// to the beacon's location rather than sitting in front of the camera.
+        /// </summary>
+        public void PlaceAtBeacon(Vector3 beaconPos, Vector3 viewer, float height = 2.4f)
+        {
+            if (_root == null) return;
+            var pos = beaconPos + Vector3.up * height;
+            var toScreen = pos - viewer; // origin→screen, matching PlaceInFrontOf's convention (visible face → viewer)
+            toScreen.y = 0f;
+            if (toScreen.sqrMagnitude < 1e-4f) toScreen = Vector3.forward;
+            toScreen.Normalize();
+            _root.transform.position = pos;
+            _root.transform.rotation = Quaternion.LookRotation(toScreen, Vector3.up);
+        }
+
         /// <summary>Moves the screen up (+) or down (-) in world space.</summary>
         public void MoveVertical(float dy)
         {

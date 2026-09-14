@@ -42,6 +42,7 @@ namespace Stellar.WorldScreen.World
         private GameObject? _pedestalGo;// the 3D stone pedestal (fixed geometry, not billboarded)
         private GameObject? _facing;    // billboarded group (cone glow + name + motes)
         private GameObject? _emblemGo;
+        private GameObject? _promptGo;  // "press F to watch" prompt, shown only when this beacon is activatable
         private RawImage? _floorImg;
         private RawImage? _coneImg;
         private RawImage? _gemImg;
@@ -106,11 +107,18 @@ namespace Stellar.WorldScreen.World
             {
                 UnityEngine.Object.Destroy(_root);
                 _root = null; _floorGo = null; _ringGroup = null; _pedestalGo = null;
-                _facing = null; _emblemGo = null;
+                _facing = null; _emblemGo = null; _promptGo = null;
                 _floorImg = null; _coneImg = null; _gemImg = null; _label = null;
                 _wallPanels.Clear();
                 for (int i = 0; i < _motes.Length; i++) _motes[i] = null;
             }
+        }
+
+        /// <summary>Shows or hides this beacon's "press F to watch" prompt (set when the player is close enough
+        /// to activate this portal).</summary>
+        public void SetPrompt(bool show)
+        {
+            if (_promptGo != null && _promptGo.activeSelf != show) _promptGo.SetActive(show);
         }
 
         private static Color Alpha(Color c, float a) => new Color(c.r, c.g, c.b, Mathf.Clamp01(a));
@@ -157,25 +165,12 @@ namespace Stellar.WorldScreen.World
             _gemImg = gem.AddComponent<RawImage>();
             _gemImg.texture = GemTex();
 
-            // Owner name (NO background plate) floating low near the pedestal; outlined so it stays readable
-            // over the light. Only the text billboards.
-            _emblemGo = WorldCanvas("Name", _facing.transform, 240, 90, 1.9f / 240f);
-            _emblemGo.transform.localPosition = new Vector3(0f, NameYM, 0.001f);
-            // Counter the beacon shrink so the name keeps a fixed readable world size (240px wide canvas).
-            _emblemGo.transform.localScale = Vector3.one * (NameWorldWidthM / (240f * BeaconScale));
-            var labelGo = new GameObject("Label");
-            labelGo.transform.SetParent(_emblemGo.transform, false);
-            _label = labelGo.AddComponent<Text>();
-            _label.font = ResolveFont();
-            _label.alignment = TextAnchor.MiddleCenter;
-            _label.horizontalOverflow = HorizontalWrapMode.Overflow;
-            _label.verticalOverflow = VerticalWrapMode.Overflow;
-            _label.color = Color.white;
-            _label.fontSize = 26;
-            Stretch(_label.rectTransform);
-            var outline = labelGo.AddComponent<Outline>();
-            outline.effectColor = new Color(0f, 0.06f, 0.10f, 0.9f);   // dark halo for legibility
-            outline.effectDistance = new Vector2(1.6f, -1.6f);
+            // Owner name + a "press F to watch" prompt, both floating above the pedestal at a FIXED world size
+            // (outlined, no background plate). The prompt is hidden until this beacon is the nearest activatable.
+            _emblemGo = CreateLabel("Name", NameWorldWidthM, NameYM, 26, out _label);
+            _promptGo = CreateLabel("Prompt", NameWorldWidthM * 0.9f, PedTopYM + 0.95f, 22, out var prompt);
+            prompt.text = "▶ Press F to watch";
+            _promptGo.SetActive(false);
 
             // Drifting motes.
             for (int i = 0; i < _motes.Length; i++)
@@ -228,6 +223,30 @@ namespace Stellar.WorldScreen.World
         {
             rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
             rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
+        }
+
+        // A billboarded, outlined world-space text label at a FIXED world width (countering BeaconScale so it
+        // stays readable at any beacon size). Returns the label root GameObject; the Text is handed back in
+        // <paramref name="text"/>. Used for both the owner name and the activation prompt.
+        private GameObject CreateLabel(string goName, float worldWidth, float localY, int fontSize, out Text text)
+        {
+            var go = WorldCanvas(goName, _facing!.transform, 240, 90, 1.9f / 240f);
+            go.transform.localPosition = new Vector3(0f, localY, 0.001f);
+            go.transform.localScale = Vector3.one * (worldWidth / (240f * BeaconScale));
+            var labelGo = new GameObject("Label");
+            labelGo.transform.SetParent(go.transform, false);
+            text = labelGo.AddComponent<Text>();
+            text.font = ResolveFont();
+            text.alignment = TextAnchor.MiddleCenter;
+            text.horizontalOverflow = HorizontalWrapMode.Overflow;
+            text.verticalOverflow = VerticalWrapMode.Overflow;
+            text.color = Color.white;
+            text.fontSize = fontSize;
+            Stretch(text.rectTransform);
+            var outline = labelGo.AddComponent<Outline>();
+            outline.effectColor = new Color(0f, 0.06f, 0.10f, 0.9f);   // dark halo for legibility
+            outline.effectDistance = new Vector2(1.6f, -1.6f);
+            return go;
         }
 
         // ---- procedural textures (built once, shared) ----
