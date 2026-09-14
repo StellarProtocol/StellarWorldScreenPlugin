@@ -279,11 +279,11 @@ namespace Stellar.WorldScreen.World
             _cone = Build(W, H, (x, y) =>
             {
                 float up = y / (float)(H - 1);                       // 0 foot … 1 top
-                float half = Mathf.Lerp(0.13f, 0.5f, up);            // flares outward toward the top
-                float fx = Mathf.Abs(x / (float)(W - 1) - 0.5f);
+                float fx = Mathf.Abs(x / (float)(W - 1) - 0.5f);      // 0 axis … 0.5 quad side
+                float half = Mathf.Lerp(0.10f, 0.40f, up);           // flares out but stays inside the quad (< 0.5)
                 float t = fx / half;                                  // 0 axis … 1 edge of the flare
-                float radial = Mathf.Exp(-Mathf.Pow(t * 1.15f, 2f)); // soft bright core fading to the edge
-                float vert = Mathf.Lerp(0.9f, 0.22f, up);            // brightest at the pedestal, fainter aloft
+                float radial = Mathf.Exp(-Mathf.Pow(t * 1.7f, 2f));  // soft core → ~0 well before the quad side
+                float vert = Mathf.Lerp(0.95f, 0f, Mathf.Pow(up, 0.75f)); // bright foot → fully 0 at the top (no edge)
                 return Mathf.Clamp01(radial * vert);
             });
             return _cone;
