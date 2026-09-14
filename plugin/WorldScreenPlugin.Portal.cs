@@ -2,6 +2,7 @@ using System;
 using System.Net.Http;
 using System.Threading.Tasks;
 using UnityEngine;
+using Stellar.Abstractions.Domain;
 using Stellar.Abstractions.Services;
 using Stellar.WorldScreen.Identity;
 using Stellar.WorldScreen.Net;
@@ -52,11 +53,11 @@ namespace Stellar.WorldScreen
 
         // Walk-up activation (SP-1c): the video screen appears above a placed beacon ONLY when the player
         // activates it (press F within range); no auto-placed personal screen.
-        private const float ActivateRangeM = 4f;    // show the prompt + accept F within this ground distance
+        private const float ActivateRangeM = 4f;    // show the prompt + accept the key within this ground distance
         private const float DeactivateRangeM = 9f;   // auto-hide the screen once the player walks past this
-        private const KeyCode ActivateKey = KeyCode.F;
         private string? _activePortalId;             // the portal whose screen is up (null = none active)
-        private bool _fWasDown;                      // previous-frame F state, for our own edge detection
+        private IHotkeyAction? _activateAction;      // framework hotkey (default F, user-rebindable) → activate/deactivate
+        private bool _activateRequested;             // set by the hotkey callback, consumed next frame by the state machine
 
         /// <summary>Overlay status line for the shared-portal section.</summary>
         internal string PortalStatus() => _portal == null ? "" : _portalStatus;
@@ -67,6 +68,12 @@ namespace Stellar.WorldScreen
         {
             try
             {
+                // Activation key via the framework hotkey service (the proven, user-rebindable input path every
+                // other plugin uses) — NOT raw Input polling, which missed presses. Shows in Settings → Hotkeys.
+                _activateAction = _services.Hotkeys.DeclareAction(
+                    new HotkeyAction("worldportal.activate", "Activate nearby portal (watch)", new KeyBinding(StellarKeyCode.F)),
+                    callback: () => _activateRequested = true);
+
                 var prefs = _services.Config.GetSection(PortalConfigSection);
                 var baseUrl = prefs.Get<string>(PortalBackendUrlKey, DefaultPortalBackendUrl);
                 if (string.IsNullOrWhiteSpace(baseUrl))
@@ -131,15 +138,14 @@ namespace Stellar.WorldScreen
             var pp = _services.PlayerState.Position;
             var player = new Vector3(pp.X, pp.Y, pp.Z);
 
-            // Edge-detect F ourselves from GetKey (stays true the whole hold) instead of GetKeyDown (true for one
-            // Unity-input frame only, which the plugin's tick can miss — the 'sometimes it works' bug).
-            bool fNow = Input.GetKey(ActivateKey);
-            bool fPressed = fNow && !_fWasDown;
-            _fWasDown = fNow;
+            // The activation key is delivered by the framework hotkey service (reliable + user-rebindable); its
+            // callback set _activateRequested — consume it here, on the state-machine frame.
+            bool pressed = _activateRequested;
+            _activateRequested = false;
 
             var nearest = _portalWorld.FindNearest(player, out float nearDist);
-            if (fPressed)
-                _log.Info($"[WorldPortal] F — active={_activePortalId ?? "none"} nearest={nearest ?? "none"} dist={nearDist:F1}m range={ActivateRangeM}m");
+            if (pressed)
+                _log.Info($"[WorldPortal] activate key — active={_activePortalId ?? "none"} nearest={nearest ?? "none"} dist={nearDist:F1}m range={ActivateRangeM}m");
 
             if (_activePortalId != null)
             {
@@ -149,20 +155,20 @@ namespace Stellar.WorldScreen
                     _screen.PlaceAtBeacon(beacon, player);
                     _screen.SetVisible(true);
                     _playerNear = true;                       // gates the proximity action menu (play/pause/fullscreen)
-                    if (GroundDist(beacon, player) > DeactivateRangeM || fPressed) Deactivate();
+                    if (GroundDist(beacon, player) > DeactivateRangeM || pressed) Deactivate();
                 }
                 else Deactivate();                            // the active portal vanished (lease expired / removed)
                 _portalWorld.SetPromptOn(null);
                 return;
             }
 
-            // No active portal → screen hidden. Prompt the nearest beacon in range; F activates it.
+            // No active portal → screen hidden. Prompt the nearest beacon in range; the key activates it.
             _screen.SetVisible(false);
             _playerNear = false;
             if (nearest != null && nearDist <= ActivateRangeM)
             {
                 _portalWorld.SetPromptOn(nearest);
-                if (fPressed) Activate(nearest);
+                if (pressed) Activate(nearest);
             }
             else
             {
@@ -281,10 +287,12 @@ namespace Stellar.WorldScreen
         /// <summary>Tears down the portal loop + client. Safe to call when portals were never started.</summary>
         private void DisposePortal()
         {
+            try { _activateAction?.Dispose(); } catch { /* best-effort */ }
             try { _portalLoop?.Dispose(); } catch { /* best-effort */ }
             try { _portalWorld.Destroy(); } catch { /* best-effort */ }
             try { _portalHttp?.Dispose(); } catch { /* best-effort */ }
             try { _installKey?.Dispose(); } catch { /* best-effort */ }
+            _activateAction = null;
             _portalLoop = null; _portal = null; _portalHttp = null; _installKey = null;
         }
     }
