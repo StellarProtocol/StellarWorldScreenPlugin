@@ -71,7 +71,15 @@ public sealed class YtDlpResolver
                 RedirectStandardOutput = true, // -g prints the URL(s) to stdout; small output, safe to drain
                 WorkingDirectory = _ffmpegDir,
             };
-            foreach (var a in new[] { "-g", "-f", formatSelector, "--no-playlist", url })
+            // player_client=android exposes YouTube's progressive format 18 (360p, combined audio+video)
+            // WITHOUT needing a JS runtime — the web client requires one and otherwise serves only separate
+            // (unstreamable-as-one-URL) DASH streams. Harmless for non-YouTube extractors (ignored).
+            foreach (var a in new[]
+            {
+                "-g", "-f", formatSelector, "--no-playlist",
+                "--extractor-args", "youtube:player_client=android",
+                url,
+            })
             {
                 psi.ArgumentList.Add(a);
             }

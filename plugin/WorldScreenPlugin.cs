@@ -149,10 +149,17 @@ namespace Stellar.WorldScreen
                 // both audio+video — auto quality) and hand it to AVPro, which buffers as it plays. Near-instant,
                 // and each client resolves the shared page URL itself (the temporary direct URL is never stored).
                 _overlay.SetStatus("Resolving stream…");
+                _log.Info($"[WorldScreen] resolving stream: {RedactSource(sourceSpec)}");
                 _resolver.ResolveStreamUrlAsync(url, Net.YtDlpResolver.BestStreamableSelector, direct => _services.Framework.Post(() =>
                 {
                     if (sourceSpec != _currentSource) return; // a newer Load superseded this one
-                    if (string.IsNullOrEmpty(direct)) { _overlay.SetStatus("Stream resolve failed"); return; }
+                    if (string.IsNullOrEmpty(direct))
+                    {
+                        _overlay.SetStatus("Stream resolve failed");
+                        _log.Warning("[WorldScreen] stream resolve FAILED — yt-dlp -g returned nothing (old yt-dlp? blocked? unavailable video)");
+                        return;
+                    }
+                    _log.Info("[WorldScreen] stream resolved → opening (streaming, no download)");
                     OpenAvPro(direct!);
                 }));
             }
