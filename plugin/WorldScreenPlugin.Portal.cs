@@ -161,29 +161,25 @@ namespace Stellar.WorldScreen
             }
         }
 
-        // Raises the screen on a portal: load its source (bundled clip if it has none) and show it at the beacon.
+        // Raises the screen on a portal: load its source (bundled clip if it has none). AVPro is kept playing
+        // even while hidden (never paused), so a decoded frame is always ready and the screen shows instantly.
         private void Activate(string portalId)
         {
             if (!_portalWorld.TryGetInfo(portalId, out var info)) return;
             _activePortalId = portalId;
             var spec = SourceSpecFor(info);
-            if (spec == _currentSource && _avpro.Exists)
-            {
-                if (!_avpro.IsPlaying) _avpro.TogglePause(); // same source — resume from where it paused
-            }
-            else LoadSource(spec);
+            if (spec != _currentSource) LoadSource(spec); // different content → load it; same → show what's playing
             _lastVolume = -1; // force distance volume to re-apply for the newly shown screen
             _log.Info($"[WorldPortal] activated {portalId} (source={info.SourceKind ?? "none"})");
         }
 
-        // Hides the screen and pauses playback (no audio/decode while nothing is being watched).
+        // Hides the screen and mutes audio (playback keeps running muted so re-activation is instant).
         private void Deactivate()
         {
             _activePortalId = null;
             _screen.SetVisible(false);
             _playerNear = false;
             if (_fullscreen.Visible) _fullscreen.Hide();
-            if (_avpro.IsPlaying) _avpro.TogglePause();
             _avpro.SetVolume(0f); _lastVolume = 0;
             _log.Info("[WorldPortal] deactivated");
         }

@@ -287,17 +287,18 @@ namespace Stellar.WorldScreen
                 return;
             }
 
+            // Bind AVPro's decoded output to the screen once frames are flowing (skipped harmlessly until then).
             var tex = _avpro.CurrentTexture();
-            if (tex == null) return; // nothing opened yet, or first frame not ready
-
-            int w = _avpro.VideoWidth, h = _avpro.VideoHeight;
-            if (w <= 0 || h <= 0) { w = tex.width; h = tex.height; }
-            if (w <= 0 || h <= 0) return;
-
-            _screen.ShowVideoPlayer(_avpro.Player, w, h); // bind AVPro's DisplayUGUI (visibility is driven by activation)
+            if (tex != null)
+            {
+                int w = _avpro.VideoWidth, h = _avpro.VideoHeight;
+                if (w <= 0 || h <= 0) { w = tex.width; h = tex.height; }
+                if (w > 0 && h > 0) _screen.ShowVideoPlayer(_avpro.Player, w, h); // AVPro DisplayUGUI (correct colour)
+            }
 
             // Portal walk-up activation drives whether/where the screen shows (SP-1c): the screen appears ONLY
-            // when the player activates a nearby portal — there is no auto-placed personal screen.
+            // when the player activates a nearby portal — there is no auto-placed personal screen. This MUST run
+            // every frame (never gated behind AVPro frame readiness) or an F press on a not-ready frame is dropped.
             UpdatePortalActivation(dt);
 
             if (_fullscreen.Visible)
