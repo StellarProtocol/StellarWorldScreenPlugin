@@ -31,7 +31,7 @@ namespace Stellar.WorldScreen.World
         private const float ConeHM = 1.8f;           // cone height above the pedestal top (shorter beacon)
         private const float NameYM = PedTopYM + 0.7f; // name floats low, near the pedestal (not up high)
 
-        private const float BeaconScale = 0.70f;     // uniform shrink of the whole beacon
+        private const float BeaconScale = 0.34f;     // uniform shrink of the whole beacon (fits a ~1.4m ring)
         private static readonly Color Tint = new Color(0.42f, 0.92f, 1.0f, 1f); // bright cyan
         private const int MoteCount = 4;
 
