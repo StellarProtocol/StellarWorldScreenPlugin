@@ -63,11 +63,13 @@ namespace Stellar.WorldScreen
         /// from <see cref="InitPortal"/>. They only act while the player is DJing their own active portal.</summary>
         private void DeclareDjHotkeys()
         {
+            // Defaults F9 (next) / F7 (prev): function keys the game doesn't bind (PageDown/PageUp collided).
+            // Rebindable in Settings → Hotkeys, and there are on-screen Next/Prev buttons too.
             _nextAction = _services.Hotkeys.DeclareAction(
-                new HotkeyAction("worldportal.next", "Portal DJ: next video", new KeyBinding(StellarKeyCode.PageDown)),
+                new HotkeyAction("worldportal.next", "Portal DJ: next video", new KeyBinding(StellarKeyCode.F9)),
                 callback: () => _nextRequested = true);
             _prevAction = _services.Hotkeys.DeclareAction(
-                new HotkeyAction("worldportal.prev", "Portal DJ: previous video", new KeyBinding(StellarKeyCode.PageUp)),
+                new HotkeyAction("worldportal.prev", "Portal DJ: previous video", new KeyBinding(StellarKeyCode.F7)),
                 callback: () => _prevRequested = true);
         }
 
