@@ -103,6 +103,7 @@ internal sealed partial class PortalClient
             using var doc = JsonDocument.Parse(body!);
             var root = doc.RootElement;
             var instanceId = GetStr(root, "instanceId");
+            var serverNowMs = GetLongOr(root, "serverNowMs", 0);
 
             var portals = new System.Collections.Generic.List<PortalInfo>();
             if (root.TryGetProperty("portals", out var arr) && arr.ValueKind == JsonValueKind.Array)
@@ -117,6 +118,15 @@ internal sealed partial class PortalClient
                         pz = GetNum(posEl, "z");
                     }
 
+                    int pbIndex = 0; long pbPos = 0, pbUpdated = 0; bool pbPlaying = false;
+                    if (p.TryGetProperty("playback", out var pb) && pb.ValueKind == JsonValueKind.Object)
+                    {
+                        pbIndex = GetIntOr(pb, "index", 0);
+                        pbPos = GetLongOr(pb, "positionMs", 0);
+                        pbPlaying = pb.TryGetProperty("playing", out var pl) && pl.ValueKind == JsonValueKind.True;
+                        pbUpdated = GetLongOr(pb, "updatedMs", 0);
+                    }
+
                     portals.Add(new PortalInfo(
                         PortalId: GetStr(p, "portalId") ?? string.Empty,
                         OwnerName: GetStr(p, "ownerName"),
@@ -126,11 +136,12 @@ internal sealed partial class PortalClient
                         Yaw: GetNum(p, "yaw"),
                         Source: GetStr(p, "source"),
                         SourceKind: GetStr(p, "sourceKind"),
-                        WatcherCount: GetIntOr(p, "watcherCount", 0)));
+                        WatcherCount: GetIntOr(p, "watcherCount", 0),
+                        Playback: new PlaybackState(pbIndex, pbPos, pbPlaying, pbUpdated)));
                 }
             }
 
-            return new HeartbeatResult(true, status, null, instanceId, portals);
+            return new HeartbeatResult(true, status, null, instanceId, serverNowMs, portals);
         }
         catch (Exception ex)
         {
@@ -162,4 +173,7 @@ internal sealed partial class PortalClient
 
     private static int GetIntOr(JsonElement el, string name, int fallback) =>
         el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out var v) && v.TryGetInt32(out var i) ? i : fallback;
+
+    private static long GetLongOr(JsonElement el, string name, long fallback) =>
+        el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out var v) && v.TryGetInt64(out var i) ? i : fallback;
 }

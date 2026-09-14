@@ -23,6 +23,8 @@ namespace Stellar.WorldScreen.Net;
 /// (services/stellar-portal/docs/api.md). <see cref="Source"/>/<see cref="SourceKind"/> mirror the
 /// placer's own <c>sourceUrl</c>/<c>sourceKind</c>; <see cref="WatcherCount"/> is currently always 0
 /// server-side (no per-viewer watcher ledger exists yet — see api.md "Known deferrals" #3).
+/// <see cref="Playback"/> (SP-2b) is the owner-DJ's last-reported playback state; a portal with no DJ
+/// reporting yet (pre-SP-2 backend, or the owner hasn't sent one) parses to the all-zero/false default.
 /// </summary>
 internal sealed record PortalInfo(
     string PortalId,
@@ -33,7 +35,14 @@ internal sealed record PortalInfo(
     double Yaw,
     string? Source,
     string? SourceKind,
-    int WatcherCount);
+    int WatcherCount,
+    PlaybackState Playback);
+
+/// <summary>The owner-DJ's playback state for one portal (SP-2b), as carried on a `/heartbeat`
+/// response's per-portal <c>playback</c> object. <see cref="UpdatedMs"/> is the backend's own clock
+/// (server epoch ms) at the moment this state was last reported — combined with
+/// <see cref="HeartbeatResult.ServerNowMs"/> a viewer can extrapolate the DJ's live position.</summary>
+internal sealed record PlaybackState(int Index, long PositionMs, bool Playing, long UpdatedMs);
 
 /// <summary>
 /// Result of <see cref="PortalClient.HeartbeatAsync"/>. On any failure (non-2xx, transport error, or a
@@ -47,10 +56,11 @@ internal sealed record HeartbeatResult(
     int StatusCode,
     string? Error,
     string? InstanceId,
+    long ServerNowMs,
     IReadOnlyList<PortalInfo> Portals)
 {
     internal static HeartbeatResult Failure(int statusCode, string? error) =>
-        new(false, statusCode, error, null, Array.Empty<PortalInfo>());
+        new(false, statusCode, error, null, 0, Array.Empty<PortalInfo>());
 }
 
 /// <summary>Result of <see cref="PortalClient.PlaceAsync"/> (`POST /portal`). <see cref="PortalId"/> is

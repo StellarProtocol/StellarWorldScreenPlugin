@@ -172,6 +172,54 @@ public class PortalClientTests
         Assert.Equal(key.SignInstall(expectedCanonical), root.GetProperty("sig").GetString());
     }
 
+    [Fact]
+    public async Task HeartbeatAsync_ParsesServerNowMsAndPerPortalPlayback()
+    {
+        var key = NewKey();
+        const string respJson =
+            "{\"instanceId\":\"inst-1\",\"serverNowMs\":1725900000000,\"portals\":[{\"portalId\":\"p1\",\"ownerName\":\"Bob\"," +
+            "\"pos\":{\"x\":1,\"y\":2,\"z\":3},\"yaw\":45,\"source\":\"https://a\",\"sourceKind\":\"url\",\"watcherCount\":0," +
+            "\"playback\":{\"index\":2,\"positionMs\":45000,\"playing\":true,\"updatedMs\":1725899999000}}]}";
+        var stub = new StubHandler(_ => Json(HttpStatusCode.OK, respJson));
+        var client = MakeClient(stub, key);
+
+        var body = new HeartbeatBody(
+            CharId: 1234, Region: "sea", MapId: 42, SceneId: 7, LineId: 1,
+            PosX: 1.5, PosY: -2, PosZ: 0, VisibleCharIds: new List<long> { 10, 20 }, Nonce: null);
+
+        var result = await client.HeartbeatAsync(body);
+
+        Assert.True(result.Ok);
+        Assert.Equal(1725900000000L, result.ServerNowMs);
+        var portal = Assert.Single(result.Portals);
+        Assert.Equal(2, portal.Playback.Index);
+        Assert.Equal(45000L, portal.Playback.PositionMs);
+        Assert.True(portal.Playback.Playing);
+        Assert.Equal(1725899999000L, portal.Playback.UpdatedMs);
+    }
+
+    [Fact]
+    public async Task HeartbeatAsync_MissingServerNowMsAndPlayback_DefaultToZeroFalse()
+    {
+        var key = NewKey();
+        const string respJson =
+            "{\"instanceId\":\"inst-1\",\"portals\":[{\"portalId\":\"p1\",\"ownerName\":\"Bob\"," +
+            "\"pos\":{\"x\":1,\"y\":2,\"z\":3},\"yaw\":45,\"source\":\"https://a\",\"sourceKind\":\"url\",\"watcherCount\":0}]}";
+        var stub = new StubHandler(_ => Json(HttpStatusCode.OK, respJson));
+        var client = MakeClient(stub, key);
+
+        var body = new HeartbeatBody(1, "sea", 1, 1, 1, 0, 0, 0, new List<long>(), null);
+        var result = await client.HeartbeatAsync(body);
+
+        Assert.True(result.Ok);
+        Assert.Equal(0L, result.ServerNowMs);
+        var portal = Assert.Single(result.Portals);
+        Assert.Equal(0, portal.Playback.Index);
+        Assert.Equal(0L, portal.Playback.PositionMs);
+        Assert.False(portal.Playback.Playing);
+        Assert.Equal(0L, portal.Playback.UpdatedMs);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.Unauthorized)]
     [InlineData(HttpStatusCode.InternalServerError)]
