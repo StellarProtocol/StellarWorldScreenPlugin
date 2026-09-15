@@ -44,5 +44,8 @@
     <Compile Include="../Identity/Es256.cs" />
     <Compile Include="../World/InstanceProbe.cs" />
     <Compile Include="../World/PortalPlaylist.cs" />
+    <!-- YtDlpResolver: BCL-only (Process/IO/Threading, no Unity) — MergeSelectorForHeight is pinned by
+         YtDlpSelectorTests so the >360p stream-and-mux selector shape can't silently regress. -->
+    <Compile Include="../Net/YtDlpResolver.cs" />
   </ItemGroup>
 </Project>

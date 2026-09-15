@@ -44,6 +44,22 @@ public sealed class YtDlpResolver
     public const string BestStreamableSelector =
         "b[vcodec^=avc1][acodec^=mp4a]/b[acodec!=none][vcodec!=none]/18";
 
+    // Player clients tried, in order, for the -g resolve. tv_embedded still exposes DIRECT (protocol=https)
+    // DASH URLs for the full ladder up to 720p WITHOUT a JS runtime — the android client is now SABR-capped
+    // to 360p (itag 18) and the web client needs a JS runtime we don't ship. android stays as the 360p
+    // fallback if tv_embedded ever fails. (Harmless for non-YouTube extractors — ignored.)
+    private const string StreamPlayerClients = "tv_embedded,android";
+
+    /// <summary>Selector for a STREAM-and-MUX pair: the best DIRECT-https video-only track ≤ <paramref name="maxHeight"/>
+    /// (avc1 preferred for AVPro) plus the best direct-https m4a audio — resolved as TWO urls that <c>StreamMuxer</c>
+    /// muxes live. Above 360p YouTube only serves separate video/audio, so a real >360p stream MUST be a merge.
+    /// Falls back to any https video+audio, then to a single combined format (18 = 360p) which yields ONE url
+    /// (played directly, no mux). <c>protocol^=https</c> avoids the SABR/HLS (m3u8) variants that need a JS runtime.</summary>
+    public static string MergeSelectorForHeight(int maxHeight) =>
+        $"bv*[height<={maxHeight}][vcodec^=avc1][protocol^=https]+ba[acodec^=mp4a][protocol^=https]/" +
+        $"bv*[height<={maxHeight}][protocol^=https]+ba[protocol^=https]/" +
+        $"b[vcodec^=avc1][acodec^=mp4a]/b[acodec!=none][vcodec!=none]/18";
+
     /// <summary>
     /// Resolves <paramref name="url"/> to a DIRECT stream URL via <c>yt-dlp -g</c> (fast — no download). A
     /// single-format selector yields exactly one URL; <paramref name="onDone"/> fires on a background thread
@@ -51,7 +67,11 @@ public sealed class YtDlpResolver
     /// </summary>
     public void ResolveStreamUrlAsync(string url, string formatSelector, Action<string?> onDone)
     {
-        var t = new Thread(() => onDone(ResolveStreamUrl(url, formatSelector)))
+        var t = new Thread(() =>
+        {
+            var urls = ResolveUrls(url, formatSelector);
+            onDone(urls != null && urls.Length > 0 ? urls[0] : null);
+        })
         {
             IsBackground = true,
             Name = "StellarWorldScreen.YtDlpResolve",
@@ -59,7 +79,23 @@ public sealed class YtDlpResolver
         t.Start();
     }
 
-    private string? ResolveStreamUrl(string url, string formatSelector)
+    /// <summary>
+    /// Resolves <paramref name="url"/> to a DIRECT stream via <c>yt-dlp -g</c> (fast — no download), returning
+    /// the resolved URL(s): ONE for a combined format (play it directly) or TWO — [video, audio] — for a merge
+    /// selector (mux them with <c>StreamMuxer</c>). <paramref name="onDone"/> fires on a background thread with
+    /// the array, or null on any failure.
+    /// </summary>
+    public void ResolveMergeUrlsAsync(string url, string formatSelector, Action<string[]?> onDone)
+    {
+        var t = new Thread(() => onDone(ResolveUrls(url, formatSelector)))
+        {
+            IsBackground = true,
+            Name = "StellarWorldScreen.YtDlpMerge",
+        };
+        t.Start();
+    }
+
+    private string[]? ResolveUrls(string url, string formatSelector)
     {
         try
         {
@@ -71,13 +107,13 @@ public sealed class YtDlpResolver
                 RedirectStandardOutput = true, // -g prints the URL(s) to stdout; small output, safe to drain
                 WorkingDirectory = _ffmpegDir,
             };
-            // player_client=android exposes YouTube's progressive format 18 (360p, combined audio+video)
-            // WITHOUT needing a JS runtime — the web client requires one and otherwise serves only separate
-            // (unstreamable-as-one-URL) DASH streams. Harmless for non-YouTube extractors (ignored).
+            // player_client: tv_embedded exposes DIRECT https DASH URLs up to 720p with NO JS runtime (android
+            // is now SABR-capped to 360p; web needs a JS runtime we don't ship). See StreamPlayerClients.
+            // Harmless for non-YouTube extractors (ignored).
             foreach (var a in new[]
             {
                 "-g", "-f", formatSelector, "--no-playlist",
-                "--extractor-args", "youtube:player_client=android",
+                "--extractor-args", "youtube:player_client=" + StreamPlayerClients,
                 url,
             })
             {
@@ -93,13 +129,15 @@ public sealed class YtDlpResolver
                 return null;
             }
             if (p.ExitCode != 0) return null;
-            // A single-format selector yields one URL; take the first non-empty line.
+            // -g prints one URL per selected format: ONE line for a combined format, TWO ([video, audio]) for a
+            // merge selector. Return every non-empty line, in order.
+            var urls = new System.Collections.Generic.List<string>(2);
             foreach (var line in outText.Split('\n'))
             {
                 var u = line.Trim();
-                if (u.Length > 0) return u;
+                if (u.Length > 0) urls.Add(u);
             }
-            return null;
+            return urls.Count > 0 ? urls.ToArray() : null;
         }
         catch (Exception)
         {

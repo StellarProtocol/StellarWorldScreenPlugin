@@ -31,6 +31,7 @@ namespace Stellar.WorldScreen
         private readonly Screen.AvProPlayer _avpro = new();
         private readonly Screen.FullscreenView _fullscreen = new();
         private readonly Net.YtDlpResolver _resolver;
+        private readonly Net.StreamMuxer _muxer;
         private UI.ActionMenu? _actionMenu;
         private bool _avproInitDone;
         private bool _playerNear;
@@ -49,6 +50,17 @@ namespace Stellar.WorldScreen
         private float _volTimer;
         private int _lastVolume = -1; // last volume sent to the helper (−1 = none yet), so we only send on change
         private double _resumeSeekS = -1.0; // after a same-source reload (quality change), resume here instead of 0:00
+
+        // Pending mux-stream open: ffmpeg starts listening only AFTER it opens both remote inputs (~1-3s), so we
+        // must delay AVPro's connect and retry it if it lands before ffmpeg is up. Set when a merge stream is
+        // muxing; cleared once frames flow (or the source is superseded). See UpdateAvPro / OpenMuxStream.
+        private const float MuxOpenDelayS = 2.0f;    // first AVPro open attempt this long after ffmpeg starts
+        private const float MuxRetryEveryS = 3.0f;   // re-open interval while ffmpeg isn't serving yet
+        private const int MuxMaxAttempts = 5;        // give up (leave error status) after this many opens
+        private string? _pendingMuxUrl;              // the http://127.0.0.1:PORT AVPro should open
+        private string? _pendingMuxSource;           // the source spec this mux belongs to (supersede guard)
+        private float _muxTimer;                     // seconds since ffmpeg started / since the last open attempt
+        private int _muxAttempts;                    // AVPro open attempts made so far
 
         // Render-quality presets (label, width, height); the index is the overlay dropdown selection.
         private static readonly (string Label, int W, int H)[] Qualities =
@@ -71,6 +83,7 @@ namespace Stellar.WorldScreen
             _client = new HelperClient(_sink);
             var slotDir = System.IO.Path.GetDirectoryName(_exePath) ?? ".";
             _resolver = new Net.YtDlpResolver(System.IO.Path.Combine(slotDir, "yt-dlp.exe"), slotDir);
+            _muxer = new Net.StreamMuxer(System.IO.Path.Combine(slotDir, "ffmpeg.exe"), slotDir);
             _overlay = new UI.OverlayPanel(services, LoadSource, HandleControl, QualityLabels(), () => _quality, SetQuality,
                 shouldRender: () => !_fullscreen.Visible,
                 onPlacePortal: PlacePortalHere, onRemovePortal: RemoveMyPortal, portalStatus: PortalStatus,
@@ -134,6 +147,7 @@ namespace Stellar.WorldScreen
             _log.Info($"[WorldScreen] loading source: {RedactSource(sourceSpec)}");
             _overlay.SetStatus("Loading…");
             _lastVolume = -1; // force a volume re-apply for the new source
+            _muxer.Stop(); _pendingMuxUrl = null; // tear down any prior live mux (frees its port + stops the fetch)
 
             if (!UseAvPro)
             {
@@ -149,24 +163,67 @@ namespace Stellar.WorldScreen
                 var url = sourceSpec.Substring(4);
                 if (IsDirectMedia(url)) { OpenAvPro(url); return; }
                 if (!_resolver.Available) { _overlay.SetStatus("yt-dlp missing"); return; }
-                // STREAM, don't download: resolve the page URL to a DIRECT stream URL (best single format carrying
-                // both audio+video — auto quality) and hand it to AVPro, which buffers as it plays. Near-instant,
-                // and each client resolves the shared page URL itself (the temporary direct URL is never stored).
+                // STREAM, don't download: resolve the page URL to DIRECT stream URL(s), capped at the chosen
+                // quality height. ONE url = a combined format (open directly); TWO = separate video+audio (the
+                // only way YouTube serves >360p) → ffmpeg live-muxes them into one MP4 AVPro streams. Each client
+                // resolves the shared page URL itself; the temporary direct URLs are never stored.
                 _overlay.SetStatus("Resolving stream…");
                 _log.Info($"[WorldScreen] resolving stream: {RedactSource(sourceSpec)}");
-                _resolver.ResolveStreamUrlAsync(url, Net.YtDlpResolver.BestStreamableSelector, direct => _services.Framework.Post(() =>
+                var selector = Net.YtDlpResolver.MergeSelectorForHeight(Qualities[_quality].H);
+                _resolver.ResolveMergeUrlsAsync(url, selector, urls => _services.Framework.Post(() =>
                 {
                     if (sourceSpec != _currentSource) return; // a newer Load superseded this one
-                    if (string.IsNullOrEmpty(direct))
+                    if (urls == null || urls.Length == 0)
                     {
                         _overlay.SetStatus("Stream resolve failed");
                         _log.Warning("[WorldScreen] stream resolve FAILED — yt-dlp -g returned nothing (old yt-dlp? blocked? unavailable video)");
                         return;
                     }
-                    _log.Info("[WorldScreen] stream resolved → opening (streaming, no download)");
-                    OpenAvPro(direct!);
+                    if (urls.Length == 1) // combined format (360p / direct progressive) — no mux needed
+                    {
+                        _log.Info("[WorldScreen] stream resolved (combined) → opening (streaming, no download)");
+                        OpenAvPro(urls[0]);
+                        return;
+                    }
+                    // Two URLs (video-only + audio-only): mux live via ffmpeg → localhost HTTP → AVPro.
+                    var httpUrl = _muxer.StartServe(urls[0], urls[1]);
+                    if (string.IsNullOrEmpty(httpUrl))
+                    {
+                        _overlay.SetStatus("Mux start failed");
+                        _log.Warning("[WorldScreen] ffmpeg mux failed to start — is ffmpeg.exe present?");
+                        return;
+                    }
+                    _log.Info($"[WorldScreen] muxing {Qualities[_quality].H}p stream via ffmpeg → {httpUrl} (opening shortly)");
+                    _overlay.SetStatus($"Buffering {Qualities[_quality].Label}…");
+                    _pendingMuxUrl = httpUrl;
+                    _pendingMuxSource = sourceSpec;
+                    _muxTimer = 0f;
+                    _muxAttempts = 0;
                 }));
             }
+        }
+
+        // Drives the delayed/retried AVPro open for a live mux stream (called each frame from UpdateAvPro while
+        // _pendingMuxUrl is set). ffmpeg's HTTP server binds only after it opens both remote inputs, so a too-early
+        // connect is refused — wait MuxOpenDelayS, then re-open every MuxRetryEveryS until frames flow.
+        private void OpenMuxStream(float dt)
+        {
+            if (_pendingMuxUrl == null) return;
+            if (_pendingMuxSource != _currentSource) { _pendingMuxUrl = null; return; } // superseded
+            if (_avpro.VideoWidth > 0) { _pendingMuxUrl = null; return; }               // frames flowing → done
+            _muxTimer += dt;
+            float due = _muxAttempts == 0 ? MuxOpenDelayS : MuxRetryEveryS;
+            if (_muxTimer < due) return;
+            if (_muxAttempts >= MuxMaxAttempts)
+            {
+                _overlay.SetStatus("Stream open failed");
+                _log.Warning("[WorldScreen] mux stream never became playable — giving up");
+                _pendingMuxUrl = null;
+                return;
+            }
+            _muxTimer = 0f;
+            _muxAttempts++;
+            OpenAvPro(_pendingMuxUrl);
         }
 
         // Opens a file path or direct URL in AVPro (main thread) and reports status.
@@ -297,6 +354,8 @@ namespace Stellar.WorldScreen
                 return;
             }
 
+            if (_pendingMuxUrl != null) OpenMuxStream(dt); // delayed/retried connect to a live ffmpeg mux stream
+
             // Bind AVPro's decoded output to the screen once frames are flowing (skipped harmlessly until then).
             var tex = _avpro.CurrentTexture();
             if (tex != null)
@@ -418,6 +477,7 @@ namespace Stellar.WorldScreen
             try { _actionMenu?.Remove(); } catch (Exception) { }
             try { _fullscreen.Destroy(); } catch (Exception) { }
             try { _avpro.Destroy(); } catch (Exception) { }
+            try { _muxer.Stop(); } catch (Exception) { }
             try { _client.Dispose(); } catch (Exception) { }
             try { _launcher.Stop(); } catch (Exception) { }
             try { _screen.Destroy(); } catch (Exception) { }
