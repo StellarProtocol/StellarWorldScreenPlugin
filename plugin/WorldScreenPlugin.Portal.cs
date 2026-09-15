@@ -63,6 +63,7 @@ namespace Stellar.WorldScreen
         private Quaternion _savedScreenRot = Quaternion.identity;
         private float _savedScreenWidth;
         private Vector3 _lastBeacon;                 // beacon pos at the last placement (for the offset math)
+        private IConfigSection? _screenPrefs;        // persists the screen setup in plugindata (across restarts)
         private IHotkeyAction? _activateAction;      // framework hotkey (default F, user-rebindable) → activate/deactivate
         private bool _activateRequested;             // set by the hotkey callback, consumed next frame by the state machine
 
@@ -81,6 +82,7 @@ namespace Stellar.WorldScreen
                     new HotkeyAction("worldportal.activate", "Activate nearby portal (watch)", new KeyBinding(StellarKeyCode.F)),
                     callback: () => _activateRequested = true);
                 DeclareDjHotkeys(); // SP-2b: next/prev for when the player DJs their own portal
+                LoadScreenPrefs();  // SP-2b: restore the persisted screen setup (placement/quality/auto-face)
 
                 var prefs = _services.Config.GetSection(PortalConfigSection);
                 var baseUrl = prefs.Get<string>(PortalBackendUrlKey, DefaultPortalBackendUrl);
@@ -245,6 +247,7 @@ namespace Stellar.WorldScreen
                 _savedScreenRot = _screen.Rotation;
                 _savedScreenWidth = _screen.WidthMetres;
                 _hasSavedScreen = true;
+                SaveScreenPrefs(); // persist the placement so it survives a client restart
             }
             _activePortalId = null;
             _screenPlaced = false;
@@ -262,8 +265,50 @@ namespace Stellar.WorldScreen
         }
 
         /// <summary>Screen Controls: continuous auto-facing (the screen turns to face you) — on/off + state.</summary>
-        internal void ToggleScreenAutoFace() => _screenAutoFace = !_screenAutoFace;
+        internal void ToggleScreenAutoFace() { _screenAutoFace = !_screenAutoFace; SaveScreenPrefs(); }
         internal bool ScreenAutoFace => _screenAutoFace;
+
+        // Loads the persisted screen setup from plugindata (called once at startup). All guarded — a fresh
+        // install / missing keys fall back to defaults.
+        private void LoadScreenPrefs()
+        {
+            try
+            {
+                _screenPrefs = _services.Config.GetSection("worldscreen");
+                _screenAutoFace = _screenPrefs.Get<bool>("autoFace", true);
+                _quality = _screenPrefs.Get<int>("quality", _quality);
+                _hasSavedScreen = _screenPrefs.Get<bool>("hasPlacement", false);
+                if (_hasSavedScreen)
+                {
+                    _savedScreenOffset = new Vector3(
+                        _screenPrefs.Get<float>("offX", 0f),
+                        _screenPrefs.Get<float>("offY", 2.4f),
+                        _screenPrefs.Get<float>("offZ", 0f));
+                    _savedScreenRot = Quaternion.Euler(0f, _screenPrefs.Get<float>("yaw", 0f), 0f);
+                    _savedScreenWidth = _screenPrefs.Get<float>("width", 3f);
+                }
+            }
+            catch (Exception) { /* config unavailable → in-memory only */ }
+        }
+
+        // Persists the current screen setup to plugindata. Called on placement/auto-face/quality changes.
+        private void SaveScreenPrefs()
+        {
+            if (_screenPrefs == null) return;
+            try
+            {
+                _screenPrefs.Set("autoFace", _screenAutoFace);
+                _screenPrefs.Set("quality", _quality);
+                _screenPrefs.Set("hasPlacement", _hasSavedScreen);
+                _screenPrefs.Set("offX", _savedScreenOffset.x);
+                _screenPrefs.Set("offY", _savedScreenOffset.y);
+                _screenPrefs.Set("offZ", _savedScreenOffset.z);
+                _screenPrefs.Set("yaw", _savedScreenRot.eulerAngles.y);
+                _screenPrefs.Set("width", _savedScreenWidth);
+                _screenPrefs.Save();
+            }
+            catch (Exception) { /* best-effort */ }
+        }
 
         /// <summary>Overlay "Place portal here" (MAIN THREAD — button click): place a shared portal at the
         /// player's current position + instance with the current video source. On success the portal exists in

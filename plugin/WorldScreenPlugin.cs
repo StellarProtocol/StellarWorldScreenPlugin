@@ -221,6 +221,7 @@ namespace Stellar.WorldScreen
         {
             if (index < 0 || index >= Qualities.Length || index == _quality) return;
             _quality = index;
+            SaveScreenPrefs(); // persist the chosen quality across client restarts
             _log.Info($"[WorldScreen] quality -> {Qualities[index].Label}");
             _resumeSeekS = _avpro.CurrentTime; // resume at the current position after the reload (don't restart at 0:00)
             LoadSource(_currentSource);
