@@ -71,6 +71,28 @@ public class HlsServerTests
     }
 
     [Fact]
+    public async Task Serves_fmp4_init_and_segment_as_video_mp4()
+    {
+        var (dir, _, _) = MakeHlsDir();
+        File.WriteAllBytes(Path.Combine(dir, "init.mp4"), new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70 });
+        File.WriteAllBytes(Path.Combine(dir, "seg00000.m4s"), new byte[] { 1, 2, 3, 4 });
+        var server = new HlsServer(dir);
+        server.Start();
+        try
+        {
+            using var http = new HttpClient();
+            var baseUrl = $"http://127.0.0.1:{server.Port}";
+            var init = await http.GetAsync($"{baseUrl}/init.mp4");
+            Assert.Equal(HttpStatusCode.OK, init.StatusCode);
+            Assert.Equal("video/mp4", init.Content.Headers.ContentType!.MediaType);
+            var seg = await http.GetAsync($"{baseUrl}/seg00000.m4s");
+            Assert.Equal(HttpStatusCode.OK, seg.StatusCode);
+            Assert.Equal("video/mp4", seg.Content.Headers.ContentType!.MediaType);
+        }
+        finally { server.Stop(); Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public async Task Missing_file_is_404()
     {
         var (dir, _, _) = MakeHlsDir();

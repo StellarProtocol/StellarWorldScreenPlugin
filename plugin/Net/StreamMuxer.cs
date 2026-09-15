@@ -55,13 +55,16 @@ public sealed class StreamMuxer
                 FileName = _ffmpegPath,
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                WorkingDirectory = _workDir,
+                // Working dir = the HLS output dir so the RELATIVE init/segment/playlist names all land here and
+                // the playlist carries bare basename URIs (a full path would become a broken HTTP URL).
+                WorkingDirectory = dir,
             };
-            // -c:v copy keeps the (expensive) 1080p video as-is; -c:a aac RE-ENCODES the audio (cheap) so it
-            // is re-timed to the video timeline — YouTube's separate audio DASH stream carries its own offset,
-            // and a naive `-c copy` left it out of sync. Explicit -map picks the one video + one audio track.
-            // event + list_size 0: keep every segment (so playback can seek back). temp_file: never expose a
-            // half-written playlist/segment.
+            // -c:v copy keeps the (expensive) 1080p video as-is; -c:a aac RE-ENCODES the audio (cheap) so it is
+            // re-timed to the video timeline (YouTube's separate audio DASH carries its own offset — a naive
+            // `-c copy` desynced it). -hls_segment_type fmp4: MP4 segments, NOT mpegts — the game's MediaFoundation
+            // decodes mpegts H.264 with the wrong colour matrix on some streams (magenta/green), but the MP4 path
+            // is always correct (same as the direct 360p stream). event + list_size 0: keep every segment (so seek
+            // works). temp_file: never expose a half-written file.
             foreach (var a in new[]
             {
                 "-hide_banner", "-loglevel", "warning",
@@ -74,9 +77,10 @@ public sealed class StreamMuxer
                 "-hls_list_size", "0",
                 "-hls_playlist_type", "event",
                 "-hls_flags", "temp_file",
-                "-hls_segment_type", "mpegts",
-                "-hls_segment_filename", Path.Combine(dir, "seg%05d.ts"),
-                Path.Combine(dir, "stream.m3u8"),
+                "-hls_segment_type", "fmp4",
+                "-hls_fmp4_init_filename", "init.mp4",
+                "-hls_segment_filename", "seg%05d.m4s",
+                "stream.m3u8",
             })
             {
                 psi.ArgumentList.Add(a);
@@ -109,7 +113,7 @@ public sealed class StreamMuxer
                 var m3u8 = Path.Combine(dir, "stream.m3u8");
                 if (!File.Exists(m3u8)) return false;
                 var text = File.ReadAllText(m3u8);
-                return text.IndexOf(".ts", StringComparison.OrdinalIgnoreCase) >= 0; // references ≥1 segment
+                return text.IndexOf(".m4s", StringComparison.OrdinalIgnoreCase) >= 0; // references ≥1 fMP4 segment
             }
             catch (Exception) { return false; }
         }

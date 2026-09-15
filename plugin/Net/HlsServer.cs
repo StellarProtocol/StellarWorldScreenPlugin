@@ -130,6 +130,8 @@ public sealed class HlsServer
         catch (Exception) { WriteStatus(stream, 404, "Not Found"); return; }
 
         string ctype = name.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase) ? "application/vnd.apple.mpegurl"
+                     : name.EndsWith(".m4s", StringComparison.OrdinalIgnoreCase) ? "video/mp4"   // fMP4 media segment
+                     : name.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ? "video/mp4"   // fMP4 init segment
                      : name.EndsWith(".ts", StringComparison.OrdinalIgnoreCase) ? "video/mp2t"
                      : "application/octet-stream";
 
