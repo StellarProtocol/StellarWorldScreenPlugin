@@ -65,6 +65,8 @@ namespace Stellar.WorldScreen
         private float _muxTimer;                     // seconds since the mux started / since the last open attempt
         private int _muxAttempts;                    // AVPro open attempts made so far
         private bool _muxFellBack;                   // already fell back to combined for this source (once only)
+        private string? _muxVideoUrl, _muxAudioUrl;  // the resolved DASH pair, kept so a seek can RE-STREAM from T
+        private double _muxDurationS;                // full video length, for the seek's remaining-bytes math
 
         // Render-quality presets (label, width, height); the index is the overlay dropdown selection.
         private static readonly (string Label, int W, int H)[] Qualities =
@@ -154,7 +156,8 @@ namespace Stellar.WorldScreen
             _overlay.SetStatus("Loading…");
             _lastVolume = -1; // force a volume re-apply for the new source
             _muxer.Stop(); _pendingMuxUrl = null; _muxFellBack = false; // tear down any prior live mux
-            _avpro.SetDurationOverride(0); // clear any previous known-duration; the resolve sets the new one
+            _muxVideoUrl = _muxAudioUrl = null;                         // (a new source; seek re-streams only a mux)
+            _avpro.SetDurationOverride(0); _avpro.SetPositionOffset(0); // reset known-duration + seek offset
 
             if (!UseAvPro)
             {
@@ -186,15 +189,19 @@ namespace Stellar.WorldScreen
                         _log.Warning("[WorldScreen] stream resolve FAILED — yt-dlp -g returned nothing (old yt-dlp? blocked? unavailable video)");
                         return;
                     }
-                    _avpro.SetDurationOverride(res.DurationSec); // HLS carries no duration → supply the known one
+                    _avpro.SetDurationOverride(res.DurationSec); // mux carries no full duration → supply the known one
+                    _avpro.SetPositionOffset(0);                 // fresh load starts at 0 (a seek sets this later)
                     if (res.Urls.Length == 1) // combined format (360p / direct progressive) — no mux needed
                     {
+                        _muxVideoUrl = _muxAudioUrl = null;
                         _log.Info("[WorldScreen] stream resolved (combined) → opening (streaming, no download)");
                         OpenAvPro(res.Urls[0]);
                         return;
                     }
-                    // Two URLs (video-only + audio-only): mux live via ffmpeg → localhost HTTP → AVPro.
-                    var httpUrl = _muxer.StartServe(res.Urls[0], res.Urls[1]);
+                    // Two URLs (video-only + audio-only): mux live via ffmpeg → localhost HTTP → AVPro. Keep the
+                    // pair + duration so a seek can re-stream from the target time (YouTube-style).
+                    _muxVideoUrl = res.Urls[0]; _muxAudioUrl = res.Urls[1]; _muxDurationS = res.DurationSec;
+                    var httpUrl = _muxer.StartServe(res.Urls[0], res.Urls[1], startSec: 0, durationSec: res.DurationSec);
                     if (string.IsNullOrEmpty(httpUrl))
                     {
                         _overlay.SetStatus("Mux start failed");
@@ -241,24 +248,25 @@ namespace Stellar.WorldScreen
             OpenAvPro(_pendingMuxUrl, seekable: false); // live mux stream — not seekable
         }
 
-        // Whether the fullscreen bar may scrub right now: a directly-seekable source (360p / file / the swapped
-        // complete copy), OR a live mux whose full faststart copy has finished muxing in the background.
-        private bool CanSeek() => _avpro.IsSeekable || _muxer.SeekableReady;
+        // Whether the fullscreen bar may scrub right now: a directly-seekable source (360p / file), OR a mux
+        // stream (which seeks YouTube-style by re-streaming from the target — always available).
+        private bool CanSeek() => _avpro.IsSeekable || _muxVideoUrl != null;
 
-        // Scrub to <paramref name="seconds"/>. A seekable source seeks in place; a still-streaming mux swaps to
-        // its complete faststart copy (finished in the background) and seeks there — after which it stays a
-        // normal seekable file. Called from the fullscreen bar's seek release.
+        // Scrub to <paramref name="seconds"/>. A directly-seekable source seeks in place; a mux stream RE-STREAMS
+        // from the target time — ffmpeg restarts with -ss T (range-fetching from T's byte offset, like YouTube),
+        // so it never downloads the whole video. Called from the fullscreen bar's seek release.
         private void DoSeek(double seconds)
         {
             if (_avpro.IsSeekable) { _avpro.Seek(seconds); return; }
-            var seekPath = _muxer.SeekablePath;
-            if (_muxer.SeekableReady && seekPath != null)
-            {
-                _resumeSeekS = seconds > 1.0 ? seconds : 1.01; // UpdateAvPro seeks here once the new media loads
-                _avpro.SetDurationOverride(0);                 // the complete copy reports its own real duration
-                OpenAvPro(seekPath, seekable: true);           // swap to the indexed file — scrub works from now on
-                _log.Info($"[WorldScreen] scrub → swapped to the seekable copy at {seconds:F0}s");
-            }
+            if (_muxVideoUrl == null || _muxAudioUrl == null) return;
+            double t = seconds < 0 ? 0 : seconds;
+            var httpUrl = _muxer.StartServe(_muxVideoUrl, _muxAudioUrl, startSec: t, durationSec: _muxDurationS);
+            if (string.IsNullOrEmpty(httpUrl)) { _overlay.SetStatus("Seek failed"); return; }
+            _avpro.SetPositionOffset(t);   // the re-streamed clip is 0-based from T → report T + local as position
+            _avOpenSource = "";            // force OpenMuxStream to (re)open the new stream (not think it's already up)
+            _pendingMuxUrl = httpUrl; _pendingMuxSource = _currentSource; _muxTimer = 0f; _muxAttempts = 0;
+            _overlay.SetStatus($"Seeking to {(int)t / 60}:{(int)t % 60:00}…");
+            _log.Info($"[WorldScreen] scrub → re-streaming from {t:F0}s");
         }
 
         // The HLS mux never became playable — stop it and fall back ONCE to a combined (single-URL, usually

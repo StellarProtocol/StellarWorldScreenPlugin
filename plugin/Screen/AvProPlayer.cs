@@ -14,7 +14,9 @@ namespace Stellar.WorldScreen.Screen
         private GameObject? _go;
         private MediaPlayer? _mp;
         private double _durationOverrideS; // known duration for sources AVPro reports 0 for (live HLS mux)
-        private bool _seekable = true;     // false for a live progressive-mux stream (no seek index → seeking freezes MF)
+        private double _positionOffsetS;   // added to CurrentTime — the video time the current stream STARTED at
+                                           // (a seek re-streams from T, so the stream plays from 0 but is at T+local)
+        private bool _seekable = true;     // in-place seek OK (direct file/360p); a mux seeks by RE-STREAMING (plugin)
 
         /// <summary>True once the MediaPlayer component exists.</summary>
         public bool Exists => _mp != null;
@@ -89,8 +91,12 @@ namespace Stellar.WorldScreen.Screen
             if (c.IsPlaying()) c.Pause(); else c.Play();
         }
 
-        /// <summary>Current playback position in seconds (0 if not ready).</summary>
-        public double CurrentTime => (_mp != null && _mp.Control != null) ? _mp.Control.GetCurrentTime() : 0.0;
+        /// <summary>Current playback position in seconds — the TRUE video time, i.e. the current stream's local
+        /// time plus the offset it started at (a seek re-streams from T, so local time is 0-based from T).</summary>
+        public double CurrentTime => _positionOffsetS + ((_mp != null && _mp.Control != null) ? _mp.Control.GetCurrentTime() : 0.0);
+
+        /// <summary>Sets the video time the current stream starts at (for a re-streamed seek); 0 for a normal load.</summary>
+        public void SetPositionOffset(double seconds) => _positionOffsetS = seconds > 0 ? seconds : 0.0;
 
         /// <summary>Media duration in seconds. When a known duration is supplied (a live progressive mux, for
         /// which AVPro reports only the loaded fragment — e.g. ~5s — not the whole video), that value WINS; the

@@ -21,15 +21,17 @@ public sealed class ProgressiveServer
     private const int WaitForDataTimeoutMs = 30000; // give up waiting for ffmpeg to reach an offset after this
     private readonly string _filePath;
     private readonly long _totalSize;
+    private readonly Func<bool>? _muxDone; // when true, the file won't grow further → stop waiting at the real EOF
     private readonly TcpListener _listener;
     private volatile bool _running;
 
     public int Port { get; }
 
-    public ProgressiveServer(string filePath, long totalSize)
+    public ProgressiveServer(string filePath, long totalSize, Func<bool>? muxDone = null)
     {
         _filePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
         _totalSize = totalSize;
+        _muxDone = muxDone;
         _listener = new TcpListener(IPAddress.Loopback, 0);
         _listener.Start();
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -158,6 +160,7 @@ public sealed class ProgressiveServer
         while (_running && waited < WaitForDataTimeoutMs)
         {
             if (fs.Length > needBeyond) return true;
+            if (_muxDone != null && _muxDone()) return false; // ffmpeg finished and never reached here → real EOF
             Thread.Sleep(20);
             waited += 20;
         }
