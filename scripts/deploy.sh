@@ -23,8 +23,8 @@ echo "=== build helper (Windows .exe) ==="
 bash "$ROOT/scripts/build-helper.sh" >/dev/null
 EXE="$ROOT/helper/target/x86_64-pc-windows-gnu/release/stellar-castbox.exe"
 
-echo "=== ensure vendor media (ffmpeg.exe / ffplay.exe / yt-dlp.exe) ==="
-{ [ -f "$ROOT/vendor/ffmpeg.exe" ] && [ -f "$ROOT/vendor/ffplay.exe" ]; } || bash "$ROOT/scripts/fetch-vendor.sh"
+echo "=== ensure vendor media (ffmpeg.exe / ffplay.exe / yt-dlp.exe / deno.exe) ==="
+{ [ -f "$ROOT/vendor/ffmpeg.exe" ] && [ -f "$ROOT/vendor/ffplay.exe" ] && [ -f "$ROOT/vendor/deno.exe" ]; } || bash "$ROOT/scripts/fetch-vendor.sh"
 
 SLOT="$GM/stellar/plugins/worldscreen"   # lowercase — never capitalize
 
@@ -34,6 +34,7 @@ cp -f "$EXE" "$SLOT/stellar-castbox.exe"
 cp -f "$ROOT/vendor/ffmpeg.exe" "$SLOT/ffmpeg.exe"                       # decodes video + audio (as sibling)
 cp -f "$ROOT/vendor/ffplay.exe" "$SLOT/ffplay.exe"                       # plays the decoded audio (as sibling)
 [ -f "$ROOT/vendor/yt-dlp.exe" ] && cp -f "$ROOT/vendor/yt-dlp.exe" "$SLOT/yt-dlp.exe" || true
+[ -f "$ROOT/vendor/deno.exe" ] && cp -f "$ROOT/vendor/deno.exe" "$SLOT/deno.exe" || true   # yt-dlp JS runtime (1080p+)
 [ -f "$ROOT/vendor/test-clip.mp4" ] && cp -f "$ROOT/vendor/test-clip.mp4" "$SLOT/test-clip.mp4" || true
 # AVPro spike test clip (720p + 440Hz tone), generated into vendor/ by hand; keep whatever is in the slot.
 [ -f "$ROOT/vendor/avpro-test.mp4" ] && cp -f "$ROOT/vendor/avpro-test.mp4" "$SLOT/avpro-test.mp4" || true

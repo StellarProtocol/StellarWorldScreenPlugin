@@ -18,15 +18,20 @@ namespace Stellar.WorldScreen.Net;
 public sealed class YtDlpResolver
 {
     private const int TimeoutMs = 300000; // 5 min — long clips download slowly; a stuck job is abandoned
-    private const int ResolveTimeoutMs = 30000; // resolving a direct URL is fast (no download)
+    private const int ResolveTimeoutMs = 45000; // resolve is fast, but spinning up the deno JS runtime adds a little
     private readonly string _ytdlpPath;
     private readonly string _ffmpegDir;
+    private readonly string? _jsRuntimePath; // bundled deno.exe (null ⇒ no-JS fallback client)
 
-    public YtDlpResolver(string ytdlpPath, string ffmpegDir)
+    public YtDlpResolver(string ytdlpPath, string ffmpegDir, string? jsRuntimePath = null)
     {
         _ytdlpPath = ytdlpPath ?? throw new ArgumentNullException(nameof(ytdlpPath));
         _ffmpegDir = ffmpegDir ?? ".";
+        _jsRuntimePath = !string.IsNullOrEmpty(jsRuntimePath) && File.Exists(jsRuntimePath) ? jsRuntimePath : null;
     }
+
+    /// <summary>Whether a JS runtime (deno) is bundled — the SUPPORTED yt-dlp path that reaches 1080p+.</summary>
+    public bool HasJsRuntime => _jsRuntimePath != null;
 
     /// <summary>Whether the bundled yt-dlp.exe is actually present.</summary>
     public bool Available => File.Exists(_ytdlpPath);
@@ -44,11 +49,12 @@ public sealed class YtDlpResolver
     public const string BestStreamableSelector =
         "b[vcodec^=avc1][acodec^=mp4a]/b[acodec!=none][vcodec!=none]/18";
 
-    // Player clients tried, in order, for the -g resolve. tv_embedded still exposes DIRECT (protocol=https)
-    // DASH URLs for the full ladder up to 720p WITHOUT a JS runtime — the android client is now SABR-capped
-    // to 360p (itag 18) and the web client needs a JS runtime we don't ship. android stays as the 360p
-    // fallback if tv_embedded ever fails. (Harmless for non-YouTube extractors — ignored.)
-    private const string StreamPlayerClients = "tv_embedded,android";
+    // No-JS FALLBACK client list (used only when deno isn't bundled): tv_embedded still exposes DIRECT
+    // (protocol=https) DASH URLs up to 4K without a JS runtime, but yt-dlp flags it "unsupported" and warns
+    // that no-JS YouTube extraction is deprecated — so it's a fallback, not the default. android is the last
+    // resort (SABR-capped to 360p / itag 18). Harmless for non-YouTube extractors (ignored). With deno present
+    // we instead use yt-dlp's DEFAULT (web) client — the supported path — which reaches 1080p+ cleanly.
+    private const string NoJsFallbackClients = "tv_embedded,android";
 
     /// <summary>Selector for a STREAM-and-MUX pair: the best DIRECT-https video-only track ≤ <paramref name="maxHeight"/>
     /// (avc1 preferred for AVPro) plus the best direct-https m4a audio — resolved as TWO urls that <c>StreamMuxer</c>
@@ -107,18 +113,24 @@ public sealed class YtDlpResolver
                 RedirectStandardOutput = true, // -g prints the URL(s) to stdout; small output, safe to drain
                 WorkingDirectory = _ffmpegDir,
             };
-            // player_client: tv_embedded exposes DIRECT https DASH URLs up to 720p with NO JS runtime (android
-            // is now SABR-capped to 360p; web needs a JS runtime we don't ship). See StreamPlayerClients.
-            // Harmless for non-YouTube extractors (ignored).
-            foreach (var a in new[]
+            psi.ArgumentList.Add("-g");
+            psi.ArgumentList.Add("-f");
+            psi.ArgumentList.Add(formatSelector);
+            psi.ArgumentList.Add("--no-playlist");
+            if (_jsRuntimePath != null)
             {
-                "-g", "-f", formatSelector, "--no-playlist",
-                "--extractor-args", "youtube:player_client=" + StreamPlayerClients,
-                url,
-            })
-            {
-                psi.ArgumentList.Add(a);
+                // SUPPORTED path: hand yt-dlp the bundled deno so its default (web) client can decipher and
+                // expose the full DASH ladder incl. 1080p+ as direct https URLs — no player_client override.
+                psi.ArgumentList.Add("--js-runtimes");
+                psi.ArgumentList.Add("deno:" + _jsRuntimePath);
             }
+            else
+            {
+                // No deno bundled — best-effort no-JS clients (deprecated; capped/fragile). See NoJsFallbackClients.
+                psi.ArgumentList.Add("--extractor-args");
+                psi.ArgumentList.Add("youtube:player_client=" + NoJsFallbackClients);
+            }
+            psi.ArgumentList.Add(url);
 
             using var p = Process.Start(psi);
             if (p == null) return null;

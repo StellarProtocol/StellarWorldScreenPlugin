@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fetch the bundled Windows media tools (ffmpeg.exe, yt-dlp.exe) into vendor/.
+# Fetch the bundled Windows media tools (ffmpeg.exe, yt-dlp.exe, deno.exe) into vendor/.
 # These are git-ignored (vendor/*.exe) — fetched, never committed. Run once (or to update).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,4 +23,12 @@ if [ ! -f "$VENDOR/ffmpeg.exe" ] || [ ! -f "$VENDOR/ffplay.exe" ]; then
     (cd "$TMP" && unzip -o -j ffmpeg.zip '*/bin/ffmpeg.exe' '*/bin/ffplay.exe' -d "$VENDOR" >/dev/null)
 fi
 ls -la "$VENDOR/ffmpeg.exe" "$VENDOR/ffplay.exe" 2>/dev/null || true
+
+echo "=== deno.exe (yt-dlp's JS runtime — the SUPPORTED path that reaches 1080p+) ==="
+if [ ! -f "$VENDOR/deno.exe" ]; then
+    curl -sSfL --retry 3 -o "$TMP/deno.zip" \
+        https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip
+    (cd "$TMP" && unzip -o -j deno.zip 'deno.exe' -d "$VENDOR" >/dev/null)
+fi
+ls -la "$VENDOR/deno.exe" 2>/dev/null || true
 echo "=== done ==="

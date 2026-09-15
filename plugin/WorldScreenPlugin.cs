@@ -70,7 +70,7 @@ namespace Stellar.WorldScreen
             ("720p", 1280, 720),
             ("1080p", 1920, 1080),
         };
-        private int _quality = 2;                       // index into Qualities (default 720p)
+        private int _quality = 3;                       // index into Qualities (default 1080p — best quality out of the box)
         private string _currentSource = "testpattern"; // last-loaded source, so a quality change reloads it
 
         public string Name => "World Screen";
@@ -82,7 +82,9 @@ namespace Stellar.WorldScreen
             _launcher = new HelperLauncher(_log.Info);
             _client = new HelperClient(_sink);
             var slotDir = System.IO.Path.GetDirectoryName(_exePath) ?? ".";
-            _resolver = new Net.YtDlpResolver(System.IO.Path.Combine(slotDir, "yt-dlp.exe"), slotDir);
+            _resolver = new Net.YtDlpResolver(
+                System.IO.Path.Combine(slotDir, "yt-dlp.exe"), slotDir,
+                jsRuntimePath: System.IO.Path.Combine(slotDir, "deno.exe")); // supported path → 1080p+
             _muxer = new Net.StreamMuxer(System.IO.Path.Combine(slotDir, "ffmpeg.exe"), slotDir);
             _overlay = new UI.OverlayPanel(services, LoadSource, HandleControl, QualityLabels(), () => _quality, SetQuality,
                 shouldRender: () => !_fullscreen.Visible,
