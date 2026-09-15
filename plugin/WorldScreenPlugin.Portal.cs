@@ -56,6 +56,8 @@ namespace Stellar.WorldScreen
         private const float ActivateRangeM = 4f;    // show the prompt + accept the key within this ground distance
         private const float DeactivateRangeM = 9f;   // auto-hide the screen once the player walks past this
         private string? _activePortalId;             // the portal whose screen is up (null = none active)
+        private bool _screenPlaced;                  // placed the screen at the beacon for THIS activation yet?
+        private bool _screenAutoFace = true;         // continuously turn the screen to face the viewer (toggle in Screen Controls)
         private IHotkeyAction? _activateAction;      // framework hotkey (default F, user-rebindable) → activate/deactivate
         private bool _activateRequested;             // set by the hotkey callback, consumed next frame by the state machine
 
@@ -177,9 +179,12 @@ namespace Stellar.WorldScreen
                 if (_portalWorld.TryGetInfo(_activePortalId, out var act))
                 {
                     var beacon = new Vector3((float)act.PosX, (float)act.PosY, (float)act.PosZ);
-                    _screen.PlaceAtBeacon(beacon, player);
                     _screen.SetVisible(true);
-                    _playerNear = true;                       // gates the proximity action menu (play/pause/fullscreen)
+                    _playerNear = true;                       // gates the proximity action menu
+                    // Place the screen at the beacon ONCE (when it exists), then leave it — so Move/size stick;
+                    // only re-face it each frame when the viewer has opted into auto-facing.
+                    if (!_screenPlaced && _screen.Exists) { _screen.PlaceAtBeacon(beacon, player); _screenPlaced = true; }
+                    else if (_screenAutoFace) _screen.FaceViewer(player);
                     if (GroundDist(beacon, player) > DeactivateRangeM || pressed) Deactivate();
                     else UpdatePlaybackSync(act, dt);         // SP-2b: DJ drives / viewer follows synced playback
                 }
@@ -211,6 +216,7 @@ namespace Stellar.WorldScreen
         {
             if (!_portalWorld.TryGetInfo(portalId, out var info)) return;
             _activePortalId = portalId;
+            _screenPlaced = false; // place the screen at the beacon on this activation
             OnActivatePlayback(info);
             _lastVolume = -1; // force distance volume to re-apply for the newly shown screen
             _log.Info($"[WorldPortal] activated {portalId} (dj={_myPortalId == portalId}, items={_activePlaylist.Count}, kind={info.SourceKind ?? "none"})");
@@ -220,6 +226,7 @@ namespace Stellar.WorldScreen
         private void Deactivate()
         {
             _activePortalId = null;
+            _screenPlaced = false;
             _screen.SetVisible(false);
             _playerNear = false;
             if (_fullscreen.Visible) _fullscreen.Hide();
@@ -232,6 +239,10 @@ namespace Stellar.WorldScreen
             float dx = a.x - b.x, dz = a.z - b.z;
             return Mathf.Sqrt(dx * dx + dz * dz);
         }
+
+        /// <summary>Screen Controls: continuous auto-facing (the screen turns to face you) — on/off + state.</summary>
+        internal void ToggleScreenAutoFace() => _screenAutoFace = !_screenAutoFace;
+        internal bool ScreenAutoFace => _screenAutoFace;
 
         /// <summary>Overlay "Place portal here" (MAIN THREAD — button click): place a shared portal at the
         /// player's current position + instance with the current video source. On success the portal exists in

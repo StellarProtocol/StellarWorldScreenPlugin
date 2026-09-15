@@ -130,6 +130,19 @@ namespace Stellar.WorldScreen.Screen
             _root.transform.rotation = Quaternion.LookRotation(toScreen, Vector3.up);
         }
 
+        /// <summary>Turns the screen (rotation only, position unchanged) to face <paramref name="viewer"/> — the
+        /// optional continuous auto-face; unlike <see cref="PlaceAtBeacon"/> it never moves the screen, so the
+        /// viewer's own Move/size adjustments stick.</summary>
+        public void FaceViewer(Vector3 viewer)
+        {
+            if (_root == null) return;
+            var toScreen = _root.transform.position - viewer;
+            toScreen.y = 0f;
+            if (toScreen.sqrMagnitude < 1e-4f) return;
+            toScreen.Normalize();
+            _root.transform.rotation = Quaternion.LookRotation(toScreen, Vector3.up);
+        }
+
         /// <summary>Moves the screen up (+) or down (-) in world space.</summary>
         public void MoveVertical(float dy)
         {

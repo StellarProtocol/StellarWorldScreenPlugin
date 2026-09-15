@@ -24,7 +24,9 @@ namespace Stellar.WorldScreen.UI
             Action<string> onCmd,             // move/size (the plugin's HandleControl)
             string[] qualityLabels,
             Func<int> currentQuality,
-            Action<int> onQuality)
+            Action<int> onQuality,
+            Func<bool> isAutoFace,            // whether the screen auto-turns to face the viewer
+            Action toggleAutoFace)
         {
             // Bottom-centre-ish (assumes ~1080p; draggable if off). y is from the top.
             var spec = new WindowSpec(
@@ -60,6 +62,7 @@ namespace Stellar.WorldScreen.UI
                 {
                     new ButtonElement(() => "Bigger", () => onCmd("bigger")),
                     new ButtonElement(() => "Smaller", () => onCmd("smaller")),
+                    new ButtonElement(() => isAutoFace() ? "Facing: auto" : "Facing: fixed", toggleAutoFace),
                 }, 6f),
                 new RowElement(new HudElement[]
                 {
