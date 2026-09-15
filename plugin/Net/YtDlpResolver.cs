@@ -106,7 +106,21 @@ public sealed class YtDlpResolver
         t.Start();
     }
 
+    // Resolves via yt-dlp, trying the FAST no-JS clients first and only paying for the deno (supported) path when
+    // the fast attempt can't get the video+audio PAIR. deno reaches formats SABR strips from the no-JS clients but
+    // roughly DOUBLES the resolve time (~6.6s vs ~3.3s measured), so it must not be on the common path.
     private ResolveResult? ResolveUrls(string url, string formatSelector)
+    {
+        var fast = RunResolve(url, formatSelector, useDeno: false);
+        if (_jsRuntimePath != null && (fast == null || fast.Urls.Length < 2))
+        {
+            var slow = RunResolve(url, formatSelector, useDeno: true);
+            if (slow != null && slow.Urls.Length >= (fast?.Urls.Length ?? 0)) return slow;
+        }
+        return fast;
+    }
+
+    private ResolveResult? RunResolve(string url, string formatSelector, bool useDeno)
     {
         try
         {
@@ -125,7 +139,7 @@ public sealed class YtDlpResolver
             psi.ArgumentList.Add("-f");
             psi.ArgumentList.Add(formatSelector);
             psi.ArgumentList.Add("--no-playlist");
-            if (_jsRuntimePath != null)
+            if (useDeno && _jsRuntimePath != null)
             {
                 // SUPPORTED path: hand yt-dlp the bundled deno so its default (web) client can decipher and
                 // expose the full DASH ladder incl. 1080p+ as direct https URLs — no player_client override.
@@ -134,7 +148,7 @@ public sealed class YtDlpResolver
             }
             else
             {
-                // No deno bundled — best-effort no-JS clients (deprecated; capped/fragile). See NoJsFallbackClients.
+                // FAST no-JS clients: tv_embedded still serves direct https 1080p and resolves in ~half the time.
                 psi.ArgumentList.Add("--extractor-args");
                 psi.ArgumentList.Add("youtube:player_client=" + NoJsFallbackClients);
             }
