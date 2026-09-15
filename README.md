@@ -73,9 +73,14 @@ A working in-world video player via AVPro. All owner-verified in-game:
 ### Not done yet / ideas
 
 - Round seek/volume knobs; hover-highlight; more bar functions (loop, playlist next/prev, quality in-bar).
-- Near-instant playback for YouTube (currently pre-downloads) via local HLS/HTTP streaming from a helper.
 - Milestone D (real Chromecast receiver), Phase 2 (P2P WebRTC live video) — not started.
 - The Rust helper/wire pipeline is dormant (`UseAvPro=true`); remove it if AVPro proves sufficient long-term.
+
+**YouTube now STREAMS** (no longer pre-downloads): the separate 1080p video+audio DASH streams are muxed
+into one progressive fragmented MP4 and served over a loopback HTTP range server AVPro streams; seek
+re-streams from the target. The full design + the hard-won MediaFoundation decoder findings (why not
+mpegts/HLS, the `tv_embedded`-vs-deno resolve, the accepted seek/load tradeoffs) are in
+**`docs/streaming.md`**.
 
 Reusable game facts + IL2CPP-uGUI techniques discovered here are banked in
 `../../docs/rendering-images-in-game.md` § "Playing VIDEO + AUDIO in-game (AVPro + Wwise)".
