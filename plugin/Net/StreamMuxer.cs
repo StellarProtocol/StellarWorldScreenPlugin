@@ -42,6 +42,24 @@ public sealed class StreamMuxer
     /// <summary>Whether the bundled ffmpeg.exe is actually present.</summary>
     public bool Available => File.Exists(_ffmpegPath);
 
+    /// <summary>Deletes leftover mux temp dirs from previous sessions (a crash/kill can strand one, and they
+    /// each hold a cached video). Safe at startup — no mux is running yet. Runs off-thread.</summary>
+    public static void SweepOldTempDirs()
+    {
+        var t = new System.Threading.Thread(() =>
+        {
+            try
+            {
+                var tmp = Path.GetTempPath();
+                foreach (var pat in new[] { "stellar-mux-*", "stellar-hls-*" })
+                    foreach (var d in Directory.EnumerateDirectories(tmp, pat))
+                        try { Directory.Delete(d, recursive: true); } catch (Exception) { }
+            }
+            catch (Exception) { }
+        }) { IsBackground = true, Name = "StellarWorldScreen.MuxSweep" };
+        t.Start();
+    }
+
     /// <summary>
     /// Kills any previous mux, then starts ffmpeg muxing <paramref name="videoUrl"/> + <paramref name="audioUrl"/>
     /// (from <paramref name="startSec"/> if &gt; 0) into one growing fragmented MP4 and serves it. Returns the

@@ -92,6 +92,7 @@ namespace Stellar.WorldScreen
                 System.IO.Path.Combine(slotDir, "yt-dlp.exe"), slotDir,
                 jsRuntimePath: System.IO.Path.Combine(slotDir, "deno.exe")); // supported path → 1080p+
             _muxer = new Net.StreamMuxer(System.IO.Path.Combine(slotDir, "ffmpeg.exe"), slotDir);
+            Net.StreamMuxer.SweepOldTempDirs(); // clear any mux caches stranded by a previous crash/kill
             _overlay = new UI.OverlayPanel(services, LoadSource, HandleControl, QualityLabels(), () => _quality, SetQuality,
                 shouldRender: () => !_fullscreen.Visible,
                 onPlacePortal: PlacePortalHere, onRemovePortal: RemoveMyPortal, portalStatus: PortalStatus,
