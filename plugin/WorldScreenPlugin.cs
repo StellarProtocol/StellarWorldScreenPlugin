@@ -48,6 +48,7 @@ namespace Stellar.WorldScreen
         private bool _placed;
         private float _volTimer;
         private int _lastVolume = -1; // last volume sent to the helper (−1 = none yet), so we only send on change
+        private double _resumeSeekS = -1.0; // after a same-source reload (quality change), resume here instead of 0:00
 
         // Render-quality presets (label, width, height); the index is the overlay dropdown selection.
         private static readonly (string Label, int W, int H)[] Qualities =
@@ -128,6 +129,7 @@ namespace Stellar.WorldScreen
         public void LoadSource(string sourceSpec)
         {
             if (string.IsNullOrWhiteSpace(sourceSpec)) return;
+            if (sourceSpec != _currentSource) _resumeSeekS = -1.0; // a NEW video starts at 0; a same-source reload (quality) resumes
             _currentSource = sourceSpec;
             _log.Info($"[WorldScreen] loading source: {RedactSource(sourceSpec)}");
             _overlay.SetStatus("Loading…");
@@ -220,6 +222,7 @@ namespace Stellar.WorldScreen
             if (index < 0 || index >= Qualities.Length || index == _quality) return;
             _quality = index;
             _log.Info($"[WorldScreen] quality -> {Qualities[index].Label}");
+            _resumeSeekS = _avpro.CurrentTime; // resume at the current position after the reload (don't restart at 0:00)
             LoadSource(_currentSource);
         }
 
@@ -300,6 +303,14 @@ namespace Stellar.WorldScreen
                 int w = _avpro.VideoWidth, h = _avpro.VideoHeight;
                 if (w <= 0 || h <= 0) { w = tex.width; h = tex.height; }
                 if (w > 0 && h > 0) _screen.ShowVideoPlayer(_avpro.Player, w, h); // AVPro DisplayUGUI (correct colour)
+            }
+
+            // After a same-source reload (quality change), jump back to where we were instead of restarting at
+            // 0:00 — once the NEW media has loaded (Duration ready) and is playing below the resume point.
+            if (_resumeSeekS > 1.0 && _avpro.Duration > 1.0 && _avpro.CurrentTime < _resumeSeekS - 1.0)
+            {
+                _avpro.Seek(_resumeSeekS);
+                _resumeSeekS = -1.0;
             }
 
             // Portal walk-up activation drives whether/where the screen shows (SP-1c): the screen appears ONLY

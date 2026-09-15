@@ -58,6 +58,11 @@ namespace Stellar.WorldScreen
         private string? _activePortalId;             // the portal whose screen is up (null = none active)
         private bool _screenPlaced;                  // placed the screen at the beacon for THIS activation yet?
         private bool _screenAutoFace = true;         // continuously turn the screen to face the viewer (toggle in Screen Controls)
+        private bool _hasSavedScreen;                // a saved screen placement exists (remembered across activations)
+        private Vector3 _savedScreenOffset;          // saved screen position as an offset from the beacon
+        private Quaternion _savedScreenRot = Quaternion.identity;
+        private float _savedScreenWidth;
+        private Vector3 _lastBeacon;                 // beacon pos at the last placement (for the offset math)
         private IHotkeyAction? _activateAction;      // framework hotkey (default F, user-rebindable) → activate/deactivate
         private bool _activateRequested;             // set by the hotkey callback, consumed next frame by the state machine
 
@@ -181,9 +186,16 @@ namespace Stellar.WorldScreen
                     var beacon = new Vector3((float)act.PosX, (float)act.PosY, (float)act.PosZ);
                     _screen.SetVisible(true);
                     _playerNear = true;                       // gates the proximity action menu
-                    // Place the screen at the beacon ONCE (when it exists), then leave it — so Move/size stick;
-                    // only re-face it each frame when the viewer has opted into auto-facing.
-                    if (!_screenPlaced && _screen.Exists) { _screen.PlaceAtBeacon(beacon, player); _screenPlaced = true; }
+                    // Place the screen ONCE (when it exists): restore the remembered placement if we have one,
+                    // else default above the beacon. Then leave it — so Move/size stick; only re-face each frame
+                    // when the viewer has opted into auto-facing.
+                    if (!_screenPlaced && _screen.Exists)
+                    {
+                        if (_hasSavedScreen) _screen.RestorePlacement(beacon + _savedScreenOffset, _savedScreenRot, _savedScreenWidth);
+                        else _screen.PlaceAtBeacon(beacon, player);
+                        _lastBeacon = beacon;
+                        _screenPlaced = true;
+                    }
                     else if (_screenAutoFace) _screen.FaceViewer(player);
                     if (GroundDist(beacon, player) > DeactivateRangeM || pressed) Deactivate();
                     else UpdatePlaybackSync(act, dt);         // SP-2b: DJ drives / viewer follows synced playback
@@ -225,6 +237,15 @@ namespace Stellar.WorldScreen
         // Hides the screen and mutes audio (playback keeps running muted so re-activation is instant).
         private void Deactivate()
         {
+            // Remember the viewer's screen placement (offset from the beacon + rotation + size) so re-activating
+            // restores it instead of snapping back to the default.
+            if (_screenPlaced && _screen.Exists)
+            {
+                _savedScreenOffset = _screen.Position - _lastBeacon;
+                _savedScreenRot = _screen.Rotation;
+                _savedScreenWidth = _screen.WidthMetres;
+                _hasSavedScreen = true;
+            }
             _activePortalId = null;
             _screenPlaced = false;
             _screen.SetVisible(false);

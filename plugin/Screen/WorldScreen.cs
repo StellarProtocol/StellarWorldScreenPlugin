@@ -34,6 +34,26 @@ namespace Stellar.WorldScreen.Screen
         /// <summary>True once the screen GameObject exists.</summary>
         public bool Exists => _root != null;
 
+        /// <summary>Current world position (zero if not created) — for saving the viewer's placement.</summary>
+        public Vector3 Position => _root != null ? _root.transform.position : Vector3.zero;
+
+        /// <summary>Current world rotation — for saving the viewer's placement.</summary>
+        public Quaternion Rotation => _root != null ? _root.transform.rotation : Quaternion.identity;
+
+        /// <summary>Current world width in metres — for saving the viewer's size.</summary>
+        public float WidthMetres => _widthMetres;
+
+        /// <summary>Restores a saved placement (position, rotation, width) — used to remember the viewer's screen
+        /// setup across deactivate/reactivate instead of snapping back to the beacon.</summary>
+        public void RestorePlacement(Vector3 position, Quaternion rotation, float widthMetres)
+        {
+            if (_root == null) return;
+            _root.transform.position = position;
+            _root.transform.rotation = rotation;
+            _widthMetres = Mathf.Clamp(widthMetres, 0.75f, 40f);
+            if (_texW > 0 && _texH > 0) SizeCanvas(_texW, _texH);
+        }
+
         // Creates the world-space canvas root (once).
         private void EnsureRoot()
         {
