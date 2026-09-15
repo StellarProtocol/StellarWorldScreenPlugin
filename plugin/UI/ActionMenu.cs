@@ -20,7 +20,11 @@ namespace Stellar.WorldScreen.UI
             Action toggleFullscreen,
             Func<bool> isPlaying,
             Action togglePause,
-            Action stop)
+            Action stop,
+            Action<string> onCmd,             // move/size (the plugin's HandleControl)
+            string[] qualityLabels,
+            Func<int> currentQuality,
+            Action<int> onQuality)
         {
             // Bottom-centre-ish (assumes ~1080p; draggable if off). y is from the top.
             var spec = new WindowSpec(
@@ -43,6 +47,25 @@ namespace Stellar.WorldScreen.UI
                     new ButtonElement(() => "Stop", stop),
                     new ButtonElement(() => isFullscreen() ? "Exit full screen" : "Full screen", toggleFullscreen),
                 }, 8f),
+                new SeparatorElement(),
+                new TextElement(() => "Move / size the screen:"),
+                new RowElement(new HudElement[]
+                {
+                    new ButtonElement(() => "Up", () => onCmd("up")),
+                    new ButtonElement(() => "Down", () => onCmd("down")),
+                    new ButtonElement(() => "Nearer", () => onCmd("nearer")),
+                    new ButtonElement(() => "Farther", () => onCmd("farther")),
+                }, 6f),
+                new RowElement(new HudElement[]
+                {
+                    new ButtonElement(() => "Bigger", () => onCmd("bigger")),
+                    new ButtonElement(() => "Smaller", () => onCmd("smaller")),
+                }, 6f),
+                new RowElement(new HudElement[]
+                {
+                    new TextElement(() => "Quality:"),
+                    new DropdownElement(currentQuality, () => qualityLabels, onQuality, 90f),
+                }, 6f),
             }, 6f)
             { Padding = 8 };
             _control = services.Windows.Register(new WindowRegistration(spec, root));

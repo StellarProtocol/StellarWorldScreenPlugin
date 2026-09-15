@@ -82,7 +82,8 @@ namespace Stellar.WorldScreen
                 toggleFullscreen: ToggleFullscreen,
                 isPlaying: () => _avpro.IsPlaying,
                 togglePause: () => _avpro.TogglePause(),
-                stop: () => LoadSource("testpattern"));
+                stop: () => LoadSource("testpattern"),
+                onCmd: HandleControl, qualityLabels: QualityLabels(), currentQuality: () => _quality, onQuality: SetQuality);
             _fullscreen.Bind(_avpro, onStop: () => LoadSource("testpattern"));
 
             // HelperClient events fire on its background thread — marshal to Unity's main thread.

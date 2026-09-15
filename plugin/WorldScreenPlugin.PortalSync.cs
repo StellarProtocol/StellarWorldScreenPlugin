@@ -25,6 +25,7 @@ namespace Stellar.WorldScreen
         private long _serverClockOffsetMs;                // serverNowMs − localNowMs, from the last heartbeat
         private bool _isDj;                               // the active portal is ours → we drive playback
         private IReadOnlyList<PlaylistItem> _activePlaylist = Array.Empty<PlaylistItem>();
+        private string? _activePlaylistSource;            // last-parsed source JSON, to re-parse only on change
         private int _djIndex;                             // DJ's current playlist index
         private float _djReportTimer;
         private int _lastReportedIndex = -1;
@@ -47,6 +48,7 @@ namespace Stellar.WorldScreen
             if (kind == null || string.IsNullOrEmpty(url)) { _portalStatus = "enter a URL/path to add"; return; }
             _draftPlaylist.Add(new PlaylistItem(url!, kind!, null));
             _portalStatus = $"playlist: {_draftPlaylist.Count} video(s)";
+            if (_myPortalId != null) PlacePortalHere(); // already have a portal → update it live with the new playlist
         }
 
         /// <summary>Overlay "Clear playlist" (main thread).</summary>
@@ -54,6 +56,7 @@ namespace Stellar.WorldScreen
         {
             _draftPlaylist.Clear();
             _portalStatus = "playlist cleared";
+            if (_myPortalId != null) PlacePortalHere(); // update the live portal to the (now empty) playlist
         }
 
         /// <summary>Overlay status: how many videos are in the draft playlist.</summary>
@@ -93,6 +96,7 @@ namespace Stellar.WorldScreen
         private void OnActivatePlayback(PortalInfo info)
         {
             _activePlaylist = PortalPlaylist.Parse(info.SourceKind, info.Source);
+            _activePlaylistSource = info.Source;
             _isDj = _myPortalId != null && _activePortalId == _myPortalId;
             _avpro.SetLoop(_activePlaylist.Count <= 1); // a single item loops; a real playlist advances instead
             if (_isDj)
@@ -109,6 +113,12 @@ namespace Stellar.WorldScreen
         /// follow (viewer) playback.</summary>
         private void UpdatePlaybackSync(PortalInfo info, float dt)
         {
+            // Keep the active playlist in sync with live edits (the owner adding/clearing re-places the portal).
+            if (info.Source != _activePlaylistSource)
+            {
+                _activePlaylist = PortalPlaylist.Parse(info.SourceKind, info.Source);
+                _activePlaylistSource = info.Source;
+            }
             bool next = _nextRequested, prev = _prevRequested;
             _nextRequested = _prevRequested = false;
             if (_isDj) DjTick(dt, next, prev);

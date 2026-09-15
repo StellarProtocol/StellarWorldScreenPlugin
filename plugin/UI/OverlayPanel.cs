@@ -77,27 +77,8 @@ namespace Stellar.WorldScreen.UI
             {
                 new ButtonElement(() => "Stop / Pattern", () => _load("testpattern")),
             }, 6f),
-            new SeparatorElement(),
-            new TextElement(() => "Move / size the screen:"),
-            new RowElement(new HudElement[]
-            {
-                new ButtonElement(() => "Up", () => _onCmd("up")),
-                new ButtonElement(() => "Down", () => _onCmd("down")),
-                new ButtonElement(() => "Nearer", () => _onCmd("nearer")),
-                new ButtonElement(() => "Farther", () => _onCmd("farther")),
-            }, 6f),
-            new RowElement(new HudElement[]
-            {
-                new ButtonElement(() => "Bigger", () => _onCmd("bigger")),
-                new ButtonElement(() => "Smaller", () => _onCmd("smaller")),
-                new ButtonElement(() => "In front of me", () => _onCmd("replace")),
-            }, 6f),
-            new SeparatorElement(),
-            new RowElement(new HudElement[]
-            {
-                new TextElement(() => "Quality:"),
-                new DropdownElement(_currentQuality, () => _qualityLabels, _onQuality, 90f),
-            }, 6f),
+            // Move/size + Quality moved to the proximity "Screen Controls" popup (owner request) — this overlay
+            // is the owner's setup panel (source + playlist + place/remove).
             };
             var portal = PortalSection();
             var all = new HudElement[baseRows.Length + portal.Length];
