@@ -57,14 +57,18 @@ public sealed class StreamMuxer
                 CreateNoWindow = true,
                 WorkingDirectory = _workDir,
             };
-            // -c copy: stream-copy both tracks (no re-encode) into HLS. event + list_size 0: keep every
-            // segment (so playback can seek back). temp_file: never expose a half-written playlist/segment.
+            // -c:v copy keeps the (expensive) 1080p video as-is; -c:a aac RE-ENCODES the audio (cheap) so it
+            // is re-timed to the video timeline — YouTube's separate audio DASH stream carries its own offset,
+            // and a naive `-c copy` left it out of sync. Explicit -map picks the one video + one audio track.
+            // event + list_size 0: keep every segment (so playback can seek back). temp_file: never expose a
+            // half-written playlist/segment.
             foreach (var a in new[]
             {
                 "-hide_banner", "-loglevel", "warning",
                 "-i", videoUrl,
                 "-i", audioUrl,
-                "-c", "copy",
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
                 "-f", "hls",
                 "-hls_time", "2",
                 "-hls_list_size", "0",

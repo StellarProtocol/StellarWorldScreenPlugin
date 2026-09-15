@@ -33,6 +33,11 @@ public sealed class YtDlpResolver
     /// <summary>Whether a JS runtime (deno) is bundled — the SUPPORTED yt-dlp path that reaches 1080p+.</summary>
     public bool HasJsRuntime => _jsRuntimePath != null;
 
+    /// <summary>A resolve result: the direct stream URL(s) (one combined, or two [video, audio] to mux) plus the
+    /// video's total duration in seconds (0 if unknown — e.g. a live stream). The duration is needed because an
+    /// HLS mux reports no duration to the player, so the plugin supplies it for the seek bar + playlist advance.</summary>
+    public sealed record ResolveResult(string[] Urls, int DurationSec);
+
     /// <summary>Whether the bundled yt-dlp.exe is actually present.</summary>
     public bool Available => File.Exists(_ytdlpPath);
 
@@ -75,8 +80,8 @@ public sealed class YtDlpResolver
     {
         var t = new Thread(() =>
         {
-            var urls = ResolveUrls(url, formatSelector);
-            onDone(urls != null && urls.Length > 0 ? urls[0] : null);
+            var res = ResolveUrls(url, formatSelector);
+            onDone(res != null && res.Urls.Length > 0 ? res.Urls[0] : null);
         })
         {
             IsBackground = true,
@@ -87,11 +92,11 @@ public sealed class YtDlpResolver
 
     /// <summary>
     /// Resolves <paramref name="url"/> to a DIRECT stream via <c>yt-dlp -g</c> (fast — no download), returning
-    /// the resolved URL(s): ONE for a combined format (play it directly) or TWO — [video, audio] — for a merge
-    /// selector (mux them with <c>StreamMuxer</c>). <paramref name="onDone"/> fires on a background thread with
-    /// the array, or null on any failure.
+    /// the resolved URL(s) + duration: ONE url for a combined format (play it directly) or TWO — [video, audio]
+    /// — for a merge selector (mux them with <c>StreamMuxer</c>). <paramref name="onDone"/> fires on a background
+    /// thread with the result, or null on any failure.
     /// </summary>
-    public void ResolveMergeUrlsAsync(string url, string formatSelector, Action<string[]?> onDone)
+    public void ResolveMergeUrlsAsync(string url, string formatSelector, Action<ResolveResult?> onDone)
     {
         var t = new Thread(() => onDone(ResolveUrls(url, formatSelector)))
         {
@@ -101,7 +106,7 @@ public sealed class YtDlpResolver
         t.Start();
     }
 
-    private string[]? ResolveUrls(string url, string formatSelector)
+    private ResolveResult? ResolveUrls(string url, string formatSelector)
     {
         try
         {
@@ -113,6 +118,9 @@ public sealed class YtDlpResolver
                 RedirectStandardOutput = true, // -g prints the URL(s) to stdout; small output, safe to drain
                 WorkingDirectory = _ffmpegDir,
             };
+            // --print DUR emits the duration first; -g then emits the selected format's URL(s). We parse both.
+            psi.ArgumentList.Add("--print");
+            psi.ArgumentList.Add("DUR=%(duration)s");
             psi.ArgumentList.Add("-g");
             psi.ArgumentList.Add("-f");
             psi.ArgumentList.Add(formatSelector);
@@ -141,15 +149,24 @@ public sealed class YtDlpResolver
                 return null;
             }
             if (p.ExitCode != 0) return null;
-            // -g prints one URL per selected format: ONE line for a combined format, TWO ([video, audio]) for a
-            // merge selector. Return every non-empty line, in order.
+            // Output: a "DUR=<seconds>" line (from --print) plus one URL line per selected format — ONE for a
+            // combined format, TWO ([video, audio]) for a merge selector. Pull the duration out; the rest are URLs.
             var urls = new System.Collections.Generic.List<string>(2);
+            int durationSec = 0;
             foreach (var line in outText.Split('\n'))
             {
-                var u = line.Trim();
-                if (u.Length > 0) urls.Add(u);
+                var t = line.Trim();
+                if (t.Length == 0) continue;
+                if (t.StartsWith("DUR=", StringComparison.Ordinal))
+                {
+                    var v = t.Substring(4);
+                    if (double.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d) && d > 0)
+                        durationSec = (int)d;
+                    continue;
+                }
+                urls.Add(t);
             }
-            return urls.Count > 0 ? urls.ToArray() : null;
+            return urls.Count > 0 ? new ResolveResult(urls.ToArray(), durationSec) : null;
         }
         catch (Exception)
         {

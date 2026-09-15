@@ -150,8 +150,10 @@ namespace Stellar.WorldScreen
             else if (prev) _djIndex = (_djIndex - 1 + count) % count;
             else if (count > 1 && DjCurrentItemLive())
             {
+                // A supplied (HLS) duration can differ from the mux's playable end by a second or two, so use a
+                // slightly wider end margin than a locally-decoded clip would need.
                 double dur = _avpro.Duration, pos = _avpro.CurrentTime;
-                if (dur > 0.5 && pos >= dur - 0.5) _djIndex = (_djIndex + 1) % count;
+                if (dur > 0.5 && pos >= dur - 1.5) _djIndex = (_djIndex + 1) % count;
             }
 
             // Load the current item ONLY when the item to play actually CHANGED (edge-triggered — never per

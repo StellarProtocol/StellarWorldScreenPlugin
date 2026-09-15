@@ -154,6 +154,7 @@ namespace Stellar.WorldScreen
             _overlay.SetStatus("Loading…");
             _lastVolume = -1; // force a volume re-apply for the new source
             _muxer.Stop(); _pendingMuxUrl = null; _muxFellBack = false; // tear down any prior live mux
+            _avpro.SetDurationOverride(0); // clear any previous known-duration; the resolve sets the new one
 
             if (!UseAvPro)
             {
@@ -176,23 +177,24 @@ namespace Stellar.WorldScreen
                 _overlay.SetStatus("Resolving stream…");
                 _log.Info($"[WorldScreen] resolving stream: {RedactSource(sourceSpec)}");
                 var selector = Net.YtDlpResolver.MergeSelectorForHeight(Qualities[_quality].H);
-                _resolver.ResolveMergeUrlsAsync(url, selector, urls => _services.Framework.Post(() =>
+                _resolver.ResolveMergeUrlsAsync(url, selector, res => _services.Framework.Post(() =>
                 {
                     if (sourceSpec != _currentSource) return; // a newer Load superseded this one
-                    if (urls == null || urls.Length == 0)
+                    if (res == null || res.Urls.Length == 0)
                     {
                         _overlay.SetStatus("Stream resolve failed");
                         _log.Warning("[WorldScreen] stream resolve FAILED — yt-dlp -g returned nothing (old yt-dlp? blocked? unavailable video)");
                         return;
                     }
-                    if (urls.Length == 1) // combined format (360p / direct progressive) — no mux needed
+                    _avpro.SetDurationOverride(res.DurationSec); // HLS carries no duration → supply the known one
+                    if (res.Urls.Length == 1) // combined format (360p / direct progressive) — no mux needed
                     {
                         _log.Info("[WorldScreen] stream resolved (combined) → opening (streaming, no download)");
-                        OpenAvPro(urls[0]);
+                        OpenAvPro(res.Urls[0]);
                         return;
                     }
                     // Two URLs (video-only + audio-only): mux live via ffmpeg → localhost HTTP → AVPro.
-                    var httpUrl = _muxer.StartServe(urls[0], urls[1]);
+                    var httpUrl = _muxer.StartServe(res.Urls[0], res.Urls[1]);
                     if (string.IsNullOrEmpty(httpUrl))
                     {
                         _overlay.SetStatus("Mux start failed");
@@ -262,12 +264,13 @@ namespace Stellar.WorldScreen
             if (!sourceSpec.StartsWith("url:", StringComparison.Ordinal)) { _overlay.SetStatus("Stream failed"); return; }
             var url = sourceSpec.Substring(4);
             _overlay.SetStatus("Buffering (lower quality)…");
-            _resolver.ResolveMergeUrlsAsync(url, Net.YtDlpResolver.BestStreamableSelector, urls => _services.Framework.Post(() =>
+            _resolver.ResolveMergeUrlsAsync(url, Net.YtDlpResolver.BestStreamableSelector, res => _services.Framework.Post(() =>
             {
                 if (sourceSpec != _currentSource) return; // superseded
-                if (urls == null || urls.Length == 0) { _overlay.SetStatus("Stream failed"); return; }
+                if (res == null || res.Urls.Length == 0) { _overlay.SetStatus("Stream failed"); return; }
+                _avpro.SetDurationOverride(res.DurationSec);
                 _log.Info("[WorldScreen] combined fallback resolved → opening (direct, lower quality)");
-                OpenAvPro(urls[0]);
+                OpenAvPro(res.Urls[0]);
             }));
         }
 

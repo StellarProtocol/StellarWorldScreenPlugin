@@ -13,6 +13,7 @@ namespace Stellar.WorldScreen.Screen
     {
         private GameObject? _go;
         private MediaPlayer? _mp;
+        private double _durationOverrideS; // known duration for sources AVPro reports 0 for (live HLS mux)
 
         /// <summary>True once the MediaPlayer component exists.</summary>
         public bool Exists => _mp != null;
@@ -90,8 +91,19 @@ namespace Stellar.WorldScreen.Screen
         /// <summary>Current playback position in seconds (0 if not ready).</summary>
         public double CurrentTime => (_mp != null && _mp.Control != null) ? _mp.Control.GetCurrentTime() : 0.0;
 
-        /// <summary>Media duration in seconds (0 if unknown/not ready).</summary>
-        public double Duration => (_mp != null && _mp.Info != null) ? _mp.Info.GetDuration() : 0.0;
+        /// <summary>Media duration in seconds. Falls back to a caller-supplied override when AVPro reports 0 —
+        /// a live HLS mux carries no duration, so the plugin supplies the known value (from yt-dlp).</summary>
+        public double Duration
+        {
+            get
+            {
+                double d = (_mp != null && _mp.Info != null) ? _mp.Info.GetDuration() : 0.0;
+                return d > 0.01 ? d : _durationOverrideS;
+            }
+        }
+
+        /// <summary>Sets a fallback duration (seconds) used when AVPro itself reports 0 (live HLS). 0 clears it.</summary>
+        public void SetDurationOverride(double seconds) => _durationOverrideS = seconds > 0 ? seconds : 0.0;
 
         /// <summary>Seeks to <paramref name="seconds"/>.</summary>
         public void Seek(double seconds) { _mp?.Control?.Seek(seconds); }
