@@ -156,13 +156,17 @@ public sealed class YtDlpResolver
 
             using var p = Process.Start(psi);
             if (p == null) return null;
-            string outText = p.StandardOutput.ReadToEnd();
+            // Drain stdout on a side task so a hung yt-dlp/deno can't block us forever: WaitForExit gates the
+            // timeout, and killing the process closes stdout so the read completes. (Reading inline BEFORE
+            // WaitForExit would block indefinitely and never reach the timeout.)
+            var readTask = System.Threading.Tasks.Task.Run(() => { try { return p.StandardOutput.ReadToEnd(); } catch (Exception) { return ""; } });
             if (!p.WaitForExit(ResolveTimeoutMs))
             {
                 try { p.Kill(entireProcessTree: true); } catch (Exception) { }
                 return null;
             }
             if (p.ExitCode != 0) return null;
+            string outText = readTask.Wait(3000) ? readTask.Result : "";
             // Output: a "DUR=<seconds>" line (from --print) plus one URL line per selected format — ONE for a
             // combined format, TWO ([video, audio]) for a merge selector. Pull the duration out; the rest are URLs.
             var urls = new System.Collections.Generic.List<string>(2);
