@@ -47,5 +47,8 @@
     <!-- YtDlpResolver: BCL-only (Process/IO/Threading, no Unity) — MergeSelectorForHeight is pinned by
          YtDlpSelectorTests so the >360p stream-and-mux selector shape can't silently regress. -->
     <Compile Include="../Net/YtDlpResolver.cs" />
+    <!-- HlsServer: BCL-only loopback HTTP server for the HLS mux — pinned by HlsServerTests (the part of
+         the >360p path we CAN verify off-game; the AVPro/MediaFoundation side needs the game). -->
+    <Compile Include="../Net/HlsServer.cs" />
   </ItemGroup>
 </Project>

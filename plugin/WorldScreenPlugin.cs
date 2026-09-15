@@ -54,16 +54,17 @@ namespace Stellar.WorldScreen
                                             // DJ logic tell the PLAYING item apart from the still-loading/test-pattern
                                             // clip (VideoWidth>0 is true for the test pattern too, so it can't be used)
 
-        // Pending mux-stream open: ffmpeg starts listening only AFTER it opens both remote inputs (~1-3s), so we
-        // must delay AVPro's connect and retry it if it lands before ffmpeg is up. Set when a merge stream is
-        // muxing; cleared once frames flow (or the source is superseded). See UpdateAvPro / OpenMuxStream.
-        private const float MuxOpenDelayS = 2.0f;    // first AVPro open attempt this long after ffmpeg starts
-        private const float MuxRetryEveryS = 3.0f;   // re-open interval while ffmpeg isn't serving yet
-        private const int MuxMaxAttempts = 5;        // give up (leave error status) after this many opens
-        private string? _pendingMuxUrl;              // the http://127.0.0.1:PORT AVPro should open
+        // Pending mux-stream open: AVPro opens the HLS playlist only once ffmpeg has written a segment
+        // (PlaylistReady). Set when a merge stream is muxing; cleared once frames flow (or superseded / fell
+        // back). See UpdateAvPro / OpenMuxStream.
+        private const float MuxReadyTimeoutS = 15f;  // give up if ffmpeg produces no HLS segment within this
+        private const float MuxRetryEveryS = 3.0f;   // re-open interval while MediaFoundation isn't yet playing
+        private const int MuxMaxAttempts = 5;        // then fall back to a combined (lower-quality) stream
+        private string? _pendingMuxUrl;              // the http://127.0.0.1:PORT/stream.m3u8 AVPro should open
         private string? _pendingMuxSource;           // the source spec this mux belongs to (supersede guard)
-        private float _muxTimer;                     // seconds since ffmpeg started / since the last open attempt
+        private float _muxTimer;                     // seconds since the mux started / since the last open attempt
         private int _muxAttempts;                    // AVPro open attempts made so far
+        private bool _muxFellBack;                   // already fell back to combined for this source (once only)
 
         // Render-quality presets (label, width, height); the index is the overlay dropdown selection.
         private static readonly (string Label, int W, int H)[] Qualities =
@@ -152,7 +153,7 @@ namespace Stellar.WorldScreen
             _log.Info($"[WorldScreen] loading source: {RedactSource(sourceSpec)}");
             _overlay.SetStatus("Loading…");
             _lastVolume = -1; // force a volume re-apply for the new source
-            _muxer.Stop(); _pendingMuxUrl = null; // tear down any prior live mux (frees its port + stops the fetch)
+            _muxer.Stop(); _pendingMuxUrl = null; _muxFellBack = false; // tear down any prior live mux
 
             if (!UseAvPro)
             {
@@ -208,30 +209,66 @@ namespace Stellar.WorldScreen
             }
         }
 
-        // Drives the delayed/retried AVPro open for a live mux stream (called each frame from UpdateAvPro while
-        // _pendingMuxUrl is set). ffmpeg's HTTP server binds only after it opens both remote inputs, so a too-early
-        // connect is refused — wait MuxOpenDelayS, then re-open every MuxRetryEveryS until frames flow.
+        // Drives the AVPro open for a live HLS mux stream (called each frame from UpdateAvPro while
+        // _pendingMuxUrl is set): wait until ffmpeg has written the first segment (PlaylistReady), open the
+        // playlist, re-open a few times if MediaFoundation hasn't started, then fall back to a combined stream.
         private void OpenMuxStream(float dt)
         {
             if (_pendingMuxUrl == null) return;
             if (_pendingMuxSource != _currentSource) { _pendingMuxUrl = null; return; } // superseded
-            // Done only once the MUX stream itself is the open+playing source. VideoWidth>0 alone is fooled by
-            // the still-showing test pattern, so also require _avOpenSource to be this mux (i.e. we've actually
-            // called OpenAvPro on the http url below), not the previous/test clip.
+            // Playing only once the MUX stream itself is the open source. VideoWidth>0 alone is fooled by the
+            // still-showing test pattern, so also require _avOpenSource to be this mux.
             if (_avOpenSource == _pendingMuxSource && _avpro.VideoWidth > 0) { _pendingMuxUrl = null; return; }
+
             _muxTimer += dt;
-            float due = _muxAttempts == 0 ? MuxOpenDelayS : MuxRetryEveryS;
-            if (_muxTimer < due) return;
-            if (_muxAttempts >= MuxMaxAttempts)
+
+            // Phase 1 — not opened yet: wait for the HLS playlist to have a segment, then open it once.
+            if (_avOpenSource != _pendingMuxSource)
             {
-                _overlay.SetStatus("Stream open failed");
-                _log.Warning("[WorldScreen] mux stream never became playable — giving up");
-                _pendingMuxUrl = null;
+                if (_muxer.PlaylistReady) { _muxTimer = 0f; _muxAttempts = 1; OpenAvPro(_pendingMuxUrl); }
+                else if (_muxTimer > MuxReadyTimeoutS) MuxGiveUp(); // ffmpeg produced no segment → give up
                 return;
             }
+
+            // Phase 2 — opened but no frames yet: give MediaFoundation time, re-open a few times (the playlist
+            // has more segments now), then fall back to a combined stream that plays for sure.
+            if (_muxTimer < MuxRetryEveryS) return;
             _muxTimer = 0f;
+            if (_muxAttempts >= MuxMaxAttempts) { MuxGiveUp(); return; }
             _muxAttempts++;
             OpenAvPro(_pendingMuxUrl);
+        }
+
+        // The HLS mux never became playable — stop it and fall back ONCE to a combined (single-URL, usually
+        // 360p) stream, which MediaFoundation plays reliably. Better a lower-quality video than a blank screen.
+        private void MuxGiveUp()
+        {
+            var spec = _pendingMuxSource;
+            _pendingMuxUrl = null;
+            _muxer.Stop();
+            if (spec != null && spec == _currentSource && !_muxFellBack)
+            {
+                _muxFellBack = true;
+                _log.Warning("[WorldScreen] mux stream not playable — falling back to a combined (lower-quality) stream");
+                FallbackToCombined(spec);
+            }
+            else { _overlay.SetStatus("Stream open failed"); _log.Warning("[WorldScreen] mux stream not playable — giving up"); }
+        }
+
+        // Resolves the page URL to a single COMBINED format (no mux) and opens it directly — the reliable
+        // lower-quality path when the HLS mux won't play.
+        private void FallbackToCombined(string sourceSpec)
+        {
+            if (!sourceSpec.StartsWith("url:", StringComparison.Ordinal)) { _overlay.SetStatus("Stream failed"); return; }
+            var url = sourceSpec.Substring(4);
+            _overlay.SetStatus("Buffering (lower quality)…");
+            _resolver.ResolveMergeUrlsAsync(url, Net.YtDlpResolver.BestStreamableSelector, urls => _services.Framework.Post(() =>
+            {
+                if (sourceSpec != _currentSource) return; // superseded
+                if (urls == null || urls.Length == 0) { _overlay.SetStatus("Stream failed"); return; }
+                _log.Info("[WorldScreen] combined fallback resolved → opening (direct, lower quality)");
+                OpenAvPro(urls[0]);
+            }));
         }
 
         // Opens a file path or direct URL in AVPro (main thread) and reports status.
