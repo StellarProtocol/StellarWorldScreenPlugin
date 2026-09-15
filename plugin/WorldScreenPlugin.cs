@@ -54,19 +54,12 @@ namespace Stellar.WorldScreen
                                             // DJ logic tell the PLAYING item apart from the still-loading/test-pattern
                                             // clip (VideoWidth>0 is true for the test pattern too, so it can't be used)
 
-        // Pending mux-stream open: AVPro opens the HLS playlist only once ffmpeg has written a segment
-        // (PlaylistReady). Set when a merge stream is muxing; cleared once frames flow (or superseded / fell
-        // back). See UpdateAvPro / OpenMuxStream.
-        private const float MuxReadyTimeoutS = 15f;  // give up if ffmpeg produces no HLS segment within this
-        private const float MuxRetryEveryS = 3.0f;   // re-open interval while MediaFoundation isn't yet playing
-        private const int MuxMaxAttempts = 5;        // then fall back to a combined (lower-quality) stream
-        private string? _pendingMuxUrl;              // the http://127.0.0.1:PORT/stream.m3u8 AVPro should open
-        private string? _pendingMuxSource;           // the source spec this mux belongs to (supersede guard)
-        private float _muxTimer;                     // seconds since the mux started / since the last open attempt
-        private int _muxAttempts;                    // AVPro open attempts made so far
+        // Direct video+audio pair watchdog: after OpenPair, watch for frames; if none appear (the video-only URL
+        // didn't play), fall back once to the combined lower-quality stream. See UpdateAvPro / PairWatchdog.
+        private const float PairWatchdogTimeoutS = 10f;
+        private string? _pairPending;                // the source whose pair we're waiting on frames for (null = none)
+        private float _pairTimer;                    // seconds since the pair opened
         private bool _muxFellBack;                   // already fell back to combined for this source (once only)
-        private string? _muxVideoUrl, _muxAudioUrl;  // the resolved DASH pair, kept so a seek can RE-STREAM from T
-        private double _muxDurationS;                // full video length, for the seek's remaining-bytes math
 
         // Render-quality presets (label, width, height); the index is the overlay dropdown selection.
         private static readonly (string Label, int W, int H)[] Qualities =
@@ -156,9 +149,7 @@ namespace Stellar.WorldScreen
             _log.Info($"[WorldScreen] loading source: {RedactSource(sourceSpec)}");
             _overlay.SetStatus("Loading…");
             _lastVolume = -1; // force a volume re-apply for the new source
-            _muxer.Stop(); _pendingMuxUrl = null; _muxFellBack = false; // tear down any prior live mux
-            _muxVideoUrl = _muxAudioUrl = null;                         // (a new source; seek re-streams only a mux)
-            _avpro.SetDurationOverride(0); _avpro.SetPositionOffset(0); // reset known-duration + seek offset
+            _muxFellBack = false; _pairPending = null; // reset stream state (OpenMedia replaces the media in place)
 
             if (!UseAvPro)
             {
@@ -175,9 +166,9 @@ namespace Stellar.WorldScreen
                 if (IsDirectMedia(url)) { OpenAvPro(url); return; }
                 if (!_resolver.Available) { _overlay.SetStatus("yt-dlp missing"); return; }
                 // STREAM, don't download: resolve the page URL to DIRECT stream URL(s), capped at the chosen
-                // quality height. ONE url = a combined format (open directly); TWO = separate video+audio (the
-                // only way YouTube serves >360p) → ffmpeg live-muxes them into one MP4 AVPro streams. Each client
-                // resolves the shared page URL itself; the temporary direct URLs are never stored.
+                // quality height. ONE url = a combined format (open directly); TWO = separate video-only +
+                // audio-only (the only way YouTube serves >360p) → stream them as a native pair (no remux, no
+                // disk, native seek). Each client resolves the shared page URL itself; the URLs aren't stored.
                 _overlay.SetStatus("Resolving stream…");
                 _log.Info($"[WorldScreen] resolving stream: {RedactSource(sourceSpec)}");
                 var selector = Net.YtDlpResolver.MergeSelectorForHeight(Qualities[_quality].H);
@@ -190,101 +181,51 @@ namespace Stellar.WorldScreen
                         _log.Warning("[WorldScreen] stream resolve FAILED — yt-dlp -g returned nothing (old yt-dlp? blocked? unavailable video)");
                         return;
                     }
-                    _avpro.SetDurationOverride(res.DurationSec); // mux carries no full duration → supply the known one
-                    _avpro.SetPositionOffset(0);                 // fresh load starts at 0 (a seek sets this later)
-                    if (res.Urls.Length == 1) // combined format (360p / direct progressive) — no mux needed
+                    if (res.Urls.Length == 1) // combined format (360p) — one self-contained stream
                     {
-                        _muxVideoUrl = _muxAudioUrl = null;
-                        _log.Info("[WorldScreen] stream resolved (combined) → opening (streaming, no download)");
+                        _log.Info("[WorldScreen] stream resolved (combined) → opening");
                         OpenAvPro(res.Urls[0]);
                         return;
                     }
-                    // Two URLs (video-only + audio-only): mux live via ffmpeg → localhost HTTP → AVPro. Keep the
-                    // pair + duration so a seek can re-stream from the target time (YouTube-style).
-                    _muxVideoUrl = res.Urls[0]; _muxAudioUrl = res.Urls[1]; _muxDurationS = res.DurationSec;
-                    var httpUrl = _muxer.StartServe(res.Urls[0], res.Urls[1], startSec: 0, durationSec: res.DurationSec);
-                    if (string.IsNullOrEmpty(httpUrl))
+                    // Two URLs: stream the video-only + audio-only DIRECTLY as a native pair — MediaFoundation
+                    // plays each as a normal remote MP4 (correct colour, native seek), and the two are kept in
+                    // sync in AvProPlayer. No ffmpeg, no disk. A watchdog falls back if the video doesn't play.
+                    _log.Info($"[WorldScreen] streaming {Qualities[_quality].H}p video+audio directly (no remux)");
+                    if (_avpro.OpenPair(res.Urls[0], res.Urls[1]))
                     {
-                        _overlay.SetStatus("Mux start failed");
-                        _log.Warning("[WorldScreen] ffmpeg mux failed to start — is ffmpeg.exe present?");
-                        return;
+                        _avOpenSource = _currentSource;
+                        _overlay.SetStatus($"Playing {Qualities[_quality].Label}…");
+                        _pairPending = sourceSpec; _pairTimer = 0f;
                     }
-                    _log.Info($"[WorldScreen] muxing {Qualities[_quality].H}p stream via ffmpeg → {httpUrl} (opening shortly)");
-                    _overlay.SetStatus($"Buffering {Qualities[_quality].Label}…");
-                    _pendingMuxUrl = httpUrl;
-                    _pendingMuxSource = sourceSpec;
-                    _muxTimer = 0f;
-                    _muxAttempts = 0;
+                    else FallbackToCombined(sourceSpec);
                 }));
             }
         }
 
-        // Drives the AVPro open for a live HLS mux stream (called each frame from UpdateAvPro while
-        // _pendingMuxUrl is set): wait until ffmpeg has written the first segment (PlaylistReady), open the
-        // playlist, re-open a few times if MediaFoundation hasn't started, then fall back to a combined stream.
-        private void OpenMuxStream(float dt)
+        // After opening a direct video+audio pair, watch for frames (called each frame from UpdateAvPro while
+        // _pairPending is set). If none appear (the video-only URL didn't play), fall back ONCE to the combined
+        // lower-quality stream so the screen is never blank.
+        private void PairWatchdog(float dt)
         {
-            if (_pendingMuxUrl == null) return;
-            if (_pendingMuxSource != _currentSource) { _pendingMuxUrl = null; return; } // superseded
-            // Playing only once the MUX stream itself is the open source. VideoWidth>0 alone is fooled by the
-            // still-showing test pattern, so also require _avOpenSource to be this mux.
-            if (_avOpenSource == _pendingMuxSource && _avpro.VideoWidth > 0) { _pendingMuxUrl = null; return; }
-
-            _muxTimer += dt;
-
-            // Phase 1 — not opened yet: wait for the HLS playlist to have a segment, then open it once.
-            if (_avOpenSource != _pendingMuxSource)
+            if (_pairPending == null) return;
+            if (_pairPending != _currentSource) { _pairPending = null; return; } // superseded
+            if (_avpro.VideoWidth > 0) { _pairPending = null; return; }          // frames flowing → done
+            _pairTimer += dt;
+            if (_pairTimer > PairWatchdogTimeoutS)
             {
-                if (_muxer.PlaylistReady) { _muxTimer = 0f; _muxAttempts = 1; OpenAvPro(_pendingMuxUrl, seekable: false); }
-                else if (_muxTimer > MuxReadyTimeoutS) MuxGiveUp(); // ffmpeg produced no head → give up
-                return;
+                var spec = _pairPending; _pairPending = null;
+                if (!_muxFellBack) { _muxFellBack = true; _log.Warning("[WorldScreen] direct pair not playing — falling back to combined"); FallbackToCombined(spec); }
+                else _overlay.SetStatus("Stream failed");
             }
-
-            // Phase 2 — opened but no frames yet: give MediaFoundation time, re-open a few times (the playlist
-            // has more segments now), then fall back to a combined stream that plays for sure.
-            if (_muxTimer < MuxRetryEveryS) return;
-            _muxTimer = 0f;
-            if (_muxAttempts >= MuxMaxAttempts) { MuxGiveUp(); return; }
-            _muxAttempts++;
-            OpenAvPro(_pendingMuxUrl, seekable: false); // live mux stream — not seekable
         }
 
-        // Whether the fullscreen bar may scrub right now: a directly-seekable source (360p / file), OR a mux
-        // stream (which seeks YouTube-style by re-streaming from the target — always available).
-        private bool CanSeek() => _avpro.IsSeekable || _muxVideoUrl != null;
+        // Whether the fullscreen bar may scrub: every source now seeks natively (files, 360p, and both pair
+        // streams are complete indexed MP4s), so this is just the player's own capability.
+        private bool CanSeek() => _avpro.IsSeekable;
 
-        // Scrub to <paramref name="seconds"/>. A directly-seekable source seeks in place; a mux stream RE-STREAMS
-        // from the target time — ffmpeg restarts with -ss T (range-fetching from T's byte offset, like YouTube),
-        // so it never downloads the whole video. Called from the fullscreen bar's seek release.
-        private void DoSeek(double seconds)
-        {
-            if (_avpro.IsSeekable) { _avpro.Seek(seconds); return; }
-            if (_muxVideoUrl == null || _muxAudioUrl == null) return;
-            double t = seconds < 0 ? 0 : seconds;
-            var httpUrl = _muxer.StartServe(_muxVideoUrl, _muxAudioUrl, startSec: t, durationSec: _muxDurationS);
-            if (string.IsNullOrEmpty(httpUrl)) { _overlay.SetStatus("Seek failed"); return; }
-            _avpro.SetPositionOffset(t);   // the re-streamed clip is 0-based from T → report T + local as position
-            _avOpenSource = "";            // force OpenMuxStream to (re)open the new stream (not think it's already up)
-            _pendingMuxUrl = httpUrl; _pendingMuxSource = _currentSource; _muxTimer = 0f; _muxAttempts = 0;
-            _overlay.SetStatus($"Seeking to {(int)t / 60}:{(int)t % 60:00}…");
-            _log.Info($"[WorldScreen] scrub → re-streaming from {t:F0}s");
-        }
-
-        // The HLS mux never became playable — stop it and fall back ONCE to a combined (single-URL, usually
-        // 360p) stream, which MediaFoundation plays reliably. Better a lower-quality video than a blank screen.
-        private void MuxGiveUp()
-        {
-            var spec = _pendingMuxSource;
-            _pendingMuxUrl = null;
-            _muxer.Stop();
-            if (spec != null && spec == _currentSource && !_muxFellBack)
-            {
-                _muxFellBack = true;
-                _log.Warning("[WorldScreen] mux stream not playable — falling back to a combined (lower-quality) stream");
-                FallbackToCombined(spec);
-            }
-            else { _overlay.SetStatus("Stream open failed"); _log.Warning("[WorldScreen] mux stream not playable — giving up"); }
-        }
+        // Scrub to <paramref name="seconds"/> — a native MediaFoundation seek (fetches only the bytes at the
+        // target, like YouTube). In pair mode AvProPlayer seeks both the video and audio streams together.
+        private void DoSeek(double seconds) => _avpro.Seek(seconds < 0 ? 0 : seconds);
 
         // Resolves the page URL to a single COMBINED format (no mux) and opens it directly — the reliable
         // lower-quality path when the HLS mux won't play.
@@ -297,7 +238,6 @@ namespace Stellar.WorldScreen
             {
                 if (sourceSpec != _currentSource) return; // superseded
                 if (res == null || res.Urls.Length == 0) { _overlay.SetStatus("Stream failed"); return; }
-                _avpro.SetDurationOverride(res.DurationSec);
                 _log.Info("[WorldScreen] combined fallback resolved → opening (direct, lower quality)");
                 OpenAvPro(res.Urls[0]);
             }));
@@ -433,7 +373,8 @@ namespace Stellar.WorldScreen
                 return;
             }
 
-            if (_pendingMuxUrl != null) OpenMuxStream(dt); // delayed/retried connect to a live ffmpeg mux stream
+            if (_pairPending != null) PairWatchdog(dt); // fall back if the direct pair produced no frames
+            _avpro.SyncTick();                          // keep the separate audio stream in sync with the video
 
             // Bind AVPro's decoded output to the screen once frames are flowing (skipped harmlessly until then).
             var tex = _avpro.CurrentTexture();

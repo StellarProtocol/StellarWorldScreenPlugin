@@ -178,7 +178,7 @@ namespace Stellar.WorldScreen
         // Auto-advance is gated on this so it can never fire on transient/loading content.
         private bool DjCurrentItemLive()
         {
-            if (_pendingMuxUrl != null) return false;      // a mux stream is still buffering
+            if (_pairPending != null) return false;        // the stream is still opening (no frames yet)
             if (_avpro.VideoWidth <= 0) return false;      // no frames yet
             return _avOpenSource == SpecForItem(_activePlaylist[ClampIndex(_djIndex)]);
         }
@@ -214,7 +214,7 @@ namespace Stellar.WorldScreen
             int idx = ClampIndex(pb.Index);
             string spec = _activePlaylist.Count > 0 ? SpecForItem(_activePlaylist[idx]) : "testpattern";
             if (spec != _currentSource) { LoadSource(spec); return; } // loading the DJ's current video; seek once it's up
-            if (_pendingMuxUrl != null) return;                       // still buffering the mux — don't seek the test pattern
+            if (_pairPending != null) return;                         // still opening the stream — nothing to seek yet
 
             long serverNow = PortalNowMs() + _serverClockOffsetMs;
             long livePosMs = pb.PositionMs + (pb.Playing ? serverNow - pb.UpdatedMs : 0);
