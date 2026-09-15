@@ -27,6 +27,7 @@ namespace Stellar.WorldScreen
         private IReadOnlyList<PlaylistItem> _activePlaylist = Array.Empty<PlaylistItem>();
         private string? _activePlaylistSource;            // last-parsed source JSON, to re-parse only on change
         private int _djIndex;                             // DJ's current playlist index
+        private string? _djLoadedSpec;                    // spec DjTick last issued a LoadSource for (null = none)
         private float _djReportTimer;
         private int _lastReportedIndex = -1;
         private bool _lastReportedPlaying;
@@ -105,6 +106,7 @@ namespace Stellar.WorldScreen
             if (_isDj)
             {
                 _djIndex = ClampIndex(info.Playback.Index);
+                _djLoadedSpec = null; // force the first DjTick to load the current item exactly once
                 _lastReportedIndex = -1; _lastReportedPlaying = false;
                 _djReportTimer = DjReportIntervalS; // force an immediate report on the first DJ tick
             }
@@ -138,23 +140,45 @@ namespace Stellar.WorldScreen
         private void DjTick(float dt, bool next, bool prev)
         {
             int count = _activePlaylist.Count;
-            if (next && count > 0) _djIndex = ((_djIndex + 1) % count + count) % count;
-            else if (prev && count > 0) _djIndex = ((_djIndex - 1) % count + count) % count;
-            else if (count > 1)
+            if (count == 0) return;
+
+            // Move the intended index: explicit next/prev, or auto-advance ONLY when the current item is the
+            // one actually open+playing (see DjCurrentItemLive). Advancing off the still-loading item or the
+            // test-pattern clip is what caused a per-frame LoadSource storm (dozens of ffmpeg/yt-dlp/deno
+            // spawns → game freeze).
+            if (next) _djIndex = (_djIndex + 1) % count;
+            else if (prev) _djIndex = (_djIndex - 1 + count) % count;
+            else if (count > 1 && DjCurrentItemLive())
             {
-                // Auto-advance when the current (non-looping) item reaches its end.
                 double dur = _avpro.Duration, pos = _avpro.CurrentTime;
                 if (dur > 0.5 && pos >= dur - 0.5) _djIndex = (_djIndex + 1) % count;
             }
 
-            // Keep the loaded video matching the current playlist item — covers first activation, live playlist
-            // edits (Add/Clear), and next/prev/auto-advance. No manual "Load" needed.
-            string curSpec = count > 0 ? SpecForItem(_activePlaylist[ClampIndex(_djIndex)]) : "testpattern";
-            if (curSpec != _currentSource) { _avpro.SetLoop(count <= 1); LoadSource(curSpec); }
+            // Load the current item ONLY when the item to play actually CHANGED (edge-triggered — never per
+            // frame): first activation (_djLoadedSpec == null), a next/prev/auto-advance, or a live playlist
+            // edit at the current index. Keying on the SPEC (not the index) also catches an Add/Clear that
+            // swaps the item under the same index. This is the guard that prevents the reload storm.
+            string curSpec = SpecForItem(_activePlaylist[ClampIndex(_djIndex)]);
+            if (curSpec != _djLoadedSpec)
+            {
+                _djLoadedSpec = curSpec;
+                _avpro.SetLoop(count <= 1);
+                LoadSource(curSpec);
+            }
 
             _djReportTimer += dt;
             bool changed = _djIndex != _lastReportedIndex || _avpro.IsPlaying != _lastReportedPlaying;
             if (changed || _djReportTimer >= DjReportIntervalS) DjReport();
+        }
+
+        // True when the DJ's current playlist item is the source AVPro actually has OPEN and is rendering
+        // (frames flowing, no mux still buffering) — NOT the test-pattern clip that shows during a load.
+        // Auto-advance is gated on this so it can never fire on transient/loading content.
+        private bool DjCurrentItemLive()
+        {
+            if (_pendingMuxUrl != null) return false;      // a mux stream is still buffering
+            if (_avpro.VideoWidth <= 0) return false;      // no frames yet
+            return _avOpenSource == SpecForItem(_activePlaylist[ClampIndex(_djIndex)]);
         }
 
         // Reports the DJ's current playback state to the backend (fire-and-forget). A 404 means the backend
@@ -188,6 +212,7 @@ namespace Stellar.WorldScreen
             int idx = ClampIndex(pb.Index);
             string spec = _activePlaylist.Count > 0 ? SpecForItem(_activePlaylist[idx]) : "testpattern";
             if (spec != _currentSource) { LoadSource(spec); return; } // loading the DJ's current video; seek once it's up
+            if (_pendingMuxUrl != null) return;                       // still buffering the mux — don't seek the test pattern
 
             long serverNow = PortalNowMs() + _serverClockOffsetMs;
             long livePosMs = pb.PositionMs + (pb.Playing ? serverNow - pb.UpdatedMs : 0);

@@ -50,6 +50,9 @@ namespace Stellar.WorldScreen
         private float _volTimer;
         private int _lastVolume = -1; // last volume sent to the helper (−1 = none yet), so we only send on change
         private double _resumeSeekS = -1.0; // after a same-source reload (quality change), resume here instead of 0:00
+        private string _avOpenSource = "";  // the source spec AVPro actually has OPEN (set at each real open) — lets
+                                            // DJ logic tell the PLAYING item apart from the still-loading/test-pattern
+                                            // clip (VideoWidth>0 is true for the test pattern too, so it can't be used)
 
         // Pending mux-stream open: ffmpeg starts listening only AFTER it opens both remote inputs (~1-3s), so we
         // must delay AVPro's connect and retry it if it lands before ffmpeg is up. Set when a merge stream is
@@ -212,7 +215,10 @@ namespace Stellar.WorldScreen
         {
             if (_pendingMuxUrl == null) return;
             if (_pendingMuxSource != _currentSource) { _pendingMuxUrl = null; return; } // superseded
-            if (_avpro.VideoWidth > 0) { _pendingMuxUrl = null; return; }               // frames flowing → done
+            // Done only once the MUX stream itself is the open+playing source. VideoWidth>0 alone is fooled by
+            // the still-showing test pattern, so also require _avOpenSource to be this mux (i.e. we've actually
+            // called OpenAvPro on the http url below), not the previous/test clip.
+            if (_avOpenSource == _pendingMuxSource && _avpro.VideoWidth > 0) { _pendingMuxUrl = null; return; }
             _muxTimer += dt;
             float due = _muxAttempts == 0 ? MuxOpenDelayS : MuxRetryEveryS;
             if (_muxTimer < due) return;
@@ -233,6 +239,7 @@ namespace Stellar.WorldScreen
         {
             _avpro.EnsureCreated();
             var ok = _avpro.Open(pathOrUrl);
+            _avOpenSource = _currentSource; // record WHAT is now open (the intended spec), not the resolved url
             _log.Info($"[WorldScreen] AVPro Open -> {ok}");
             _overlay.SetStatus(ok ? "Playing…" : "Open failed");
         }
