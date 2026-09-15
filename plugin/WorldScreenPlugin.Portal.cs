@@ -146,7 +146,10 @@ namespace Stellar.WorldScreen
                 if (p.OwnerCharId == myCharId)
                 {
                     _myPortalId = p.PortalId;
-                    _log.Info($"[WorldPortal] re-claimed own portal {p.PortalId} (ownerCharId={myCharId})");
+                    // Seed the draft from the reclaimed portal so the DJ + editor reflect its current playlist.
+                    if (_draftPlaylist.Count == 0)
+                        foreach (var it in PortalPlaylist.Parse(p.SourceKind, p.Source)) _draftPlaylist.Add(it);
+                    _log.Info($"[WorldPortal] re-claimed own portal {p.PortalId} ({_draftPlaylist.Count} item(s))");
                     break;
                 }
             }

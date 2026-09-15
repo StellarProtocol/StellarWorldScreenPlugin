@@ -95,61 +95,66 @@ namespace Stellar.WorldScreen
         /// portal. The DJ starts playing its current item; the viewer's per-frame sync loads + seeks instead.</summary>
         private void OnActivatePlayback(PortalInfo info)
         {
-            _activePlaylist = PortalPlaylist.Parse(info.SourceKind, info.Source);
-            _activePlaylistSource = info.Source;
             _isDj = _myPortalId != null && _activePortalId == _myPortalId;
+            // The DJ plays its OWN live draft directly (Add/Clear reflect instantly, no backend round-trip); a
+            // viewer follows the portal's stored playlist. Loading happens each frame in DjTick/ViewerTick, so
+            // there's no wait for the next heartbeat.
+            _activePlaylist = _isDj ? _draftPlaylist : PortalPlaylist.Parse(info.SourceKind, info.Source);
+            _activePlaylistSource = info.Source;
             _avpro.SetLoop(_activePlaylist.Count <= 1); // a single item loops; a real playlist advances instead
             if (_isDj)
             {
                 _djIndex = ClampIndex(info.Playback.Index);
                 _lastReportedIndex = -1; _lastReportedPlaying = false;
                 _djReportTimer = DjReportIntervalS; // force an immediate report on the first DJ tick
-                LoadPlaylistItem(_djIndex);
             }
-            // Viewer: ViewerTick loads/seeks per frame from the live playback state — nothing to load here.
         }
 
         /// <summary>Per-frame while a portal is active (from <see cref="UpdatePortalActivation"/>): drive (DJ) or
         /// follow (viewer) playback.</summary>
         private void UpdatePlaybackSync(PortalInfo info, float dt)
         {
-            // Keep the active playlist in sync with live edits (the owner adding/clearing re-places the portal).
-            if (info.Source != _activePlaylistSource)
-            {
-                _activePlaylist = PortalPlaylist.Parse(info.SourceKind, info.Source);
-                _activePlaylistSource = info.Source;
-            }
             bool next = _nextRequested, prev = _prevRequested;
             _nextRequested = _prevRequested = false;
-            if (_isDj) DjTick(dt, next, prev);
-            else ViewerTick(info);
+            if (_isDj)
+            {
+                _activePlaylist = _draftPlaylist; // owner's live list — Add/Clear are reflected instantly
+                DjTick(dt, next, prev);
+            }
+            else
+            {
+                // Viewer: follow the portal's stored playlist, re-parsing only when it changes.
+                if (info.Source != _activePlaylistSource)
+                {
+                    _activePlaylist = PortalPlaylist.Parse(info.SourceKind, info.Source);
+                    _activePlaylistSource = info.Source;
+                }
+                ViewerTick(info);
+            }
         }
 
         // ---- DJ ----
 
         private void DjTick(float dt, bool next, bool prev)
         {
-            if (next) DjAdvance(+1);
-            else if (prev) DjAdvance(-1);
-            else if (_activePlaylist.Count > 1)
+            int count = _activePlaylist.Count;
+            if (next && count > 0) _djIndex = ((_djIndex + 1) % count + count) % count;
+            else if (prev && count > 0) _djIndex = ((_djIndex - 1) % count + count) % count;
+            else if (count > 1)
             {
                 // Auto-advance when the current (non-looping) item reaches its end.
                 double dur = _avpro.Duration, pos = _avpro.CurrentTime;
-                if (dur > 0.5 && pos >= dur - 0.5) DjAdvance(+1);
+                if (dur > 0.5 && pos >= dur - 0.5) _djIndex = (_djIndex + 1) % count;
             }
+
+            // Keep the loaded video matching the current playlist item — covers first activation, live playlist
+            // edits (Add/Clear), and next/prev/auto-advance. No manual "Load" needed.
+            string curSpec = count > 0 ? SpecForItem(_activePlaylist[ClampIndex(_djIndex)]) : "testpattern";
+            if (curSpec != _currentSource) { _avpro.SetLoop(count <= 1); LoadSource(curSpec); }
 
             _djReportTimer += dt;
             bool changed = _djIndex != _lastReportedIndex || _avpro.IsPlaying != _lastReportedPlaying;
             if (changed || _djReportTimer >= DjReportIntervalS) DjReport();
-        }
-
-        private void DjAdvance(int delta)
-        {
-            int count = _activePlaylist.Count;
-            if (count == 0) return;
-            _djIndex = ((_djIndex + delta) % count + count) % count; // wrap both directions
-            LoadPlaylistItem(_djIndex);
-            DjReport(); // index changed → report immediately
         }
 
         // Reports the DJ's current playback state to the backend (fire-and-forget). A 404 means the backend
@@ -201,11 +206,6 @@ namespace Stellar.WorldScreen
 
         private int ClampIndex(int idx) =>
             _activePlaylist.Count == 0 ? 0 : Mathf.Clamp(idx, 0, _activePlaylist.Count - 1);
-
-        private void LoadPlaylistItem(int idx)
-        {
-            LoadSource(_activePlaylist.Count == 0 ? "testpattern" : SpecForItem(_activePlaylist[ClampIndex(idx)]));
-        }
 
         private static string SpecForItem(PlaylistItem item)
         {
