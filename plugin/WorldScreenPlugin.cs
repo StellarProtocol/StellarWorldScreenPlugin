@@ -227,8 +227,8 @@ namespace Stellar.WorldScreen
             // Phase 1 — not opened yet: wait for the HLS playlist to have a segment, then open it once.
             if (_avOpenSource != _pendingMuxSource)
             {
-                if (_muxer.PlaylistReady) { _muxTimer = 0f; _muxAttempts = 1; OpenAvPro(_pendingMuxUrl); }
-                else if (_muxTimer > MuxReadyTimeoutS) MuxGiveUp(); // ffmpeg produced no segment → give up
+                if (_muxer.PlaylistReady) { _muxTimer = 0f; _muxAttempts = 1; OpenAvPro(_pendingMuxUrl, seekable: false); }
+                else if (_muxTimer > MuxReadyTimeoutS) MuxGiveUp(); // ffmpeg produced no head → give up
                 return;
             }
 
@@ -238,7 +238,7 @@ namespace Stellar.WorldScreen
             _muxTimer = 0f;
             if (_muxAttempts >= MuxMaxAttempts) { MuxGiveUp(); return; }
             _muxAttempts++;
-            OpenAvPro(_pendingMuxUrl);
+            OpenAvPro(_pendingMuxUrl, seekable: false); // live mux stream — not seekable
         }
 
         // The HLS mux never became playable — stop it and fall back ONCE to a combined (single-URL, usually
@@ -275,9 +275,10 @@ namespace Stellar.WorldScreen
         }
 
         // Opens a file path or direct URL in AVPro (main thread) and reports status.
-        private void OpenAvPro(string pathOrUrl)
+        private void OpenAvPro(string pathOrUrl, bool seekable = true)
         {
             _avpro.EnsureCreated();
+            _avpro.SetSeekable(seekable); // a live progressive-mux stream has no seek index → not seekable
             var ok = _avpro.Open(pathOrUrl);
             _avOpenSource = _currentSource; // record WHAT is now open (the intended spec), not the resolved url
             _log.Info($"[WorldScreen] AVPro Open -> {ok}");

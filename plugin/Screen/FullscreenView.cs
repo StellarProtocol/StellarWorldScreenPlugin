@@ -180,7 +180,9 @@ namespace Stellar.WorldScreen.Screen
 
             if (press)
             {
-                if (OverPadded(_seekTrackRt, 16f)) { _seekDrag = true; Frac(_seekTrackRt, out _seekPreview); }
+                // Only allow a seek drag when the source is seekable — a live progressive-mux stream has no seek
+                // index, so seeking it freezes the decoder; ignore knob presses there entirely.
+                if (OverPadded(_seekTrackRt, 16f) && _player.IsSeekable) { _seekDrag = true; Frac(_seekTrackRt, out _seekPreview); }
                 else if (OverPadded(_volTrackRt, 16f)) _volDrag = true;
             }
 
