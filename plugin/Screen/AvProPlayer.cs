@@ -92,14 +92,16 @@ namespace Stellar.WorldScreen.Screen
         /// <summary>Current playback position in seconds (0 if not ready).</summary>
         public double CurrentTime => (_mp != null && _mp.Control != null) ? _mp.Control.GetCurrentTime() : 0.0;
 
-        /// <summary>Media duration in seconds. Falls back to a caller-supplied override when AVPro reports 0 —
-        /// a live HLS mux carries no duration, so the plugin supplies the known value (from yt-dlp).</summary>
+        /// <summary>Media duration in seconds. When a known duration is supplied (a live progressive mux, for
+        /// which AVPro reports only the loaded fragment — e.g. ~5s — not the whole video), that value WINS; the
+        /// override is only set for resolved streams (from yt-dlp) and cleared for local/direct sources, where
+        /// AVPro's own report is authoritative.</summary>
         public double Duration
         {
             get
             {
-                double d = (_mp != null && _mp.Info != null) ? _mp.Info.GetDuration() : 0.0;
-                return d > 0.01 ? d : _durationOverrideS;
+                if (_durationOverrideS > 0.01) return _durationOverrideS;
+                return (_mp != null && _mp.Info != null) ? _mp.Info.GetDuration() : 0.0;
             }
         }
 
