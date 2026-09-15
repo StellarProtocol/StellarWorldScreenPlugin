@@ -105,7 +105,7 @@ namespace Stellar.WorldScreen
                 stop: () => LoadSource("testpattern"),
                 onCmd: HandleControl, qualityLabels: QualityLabels(), currentQuality: () => _quality, onQuality: SetQuality,
                 isAutoFace: () => ScreenAutoFace, toggleAutoFace: ToggleScreenAutoFace);
-            _fullscreen.Bind(_avpro, onStop: () => LoadSource("testpattern"));
+            _fullscreen.Bind(_avpro, onStop: () => LoadSource("testpattern"), canSeek: CanSeek, onSeek: DoSeek);
 
             // HelperClient events fire on its background thread — marshal to Unity's main thread.
             _client.OnConnected += () => _services.Framework.Post(() =>
@@ -239,6 +239,26 @@ namespace Stellar.WorldScreen
             if (_muxAttempts >= MuxMaxAttempts) { MuxGiveUp(); return; }
             _muxAttempts++;
             OpenAvPro(_pendingMuxUrl, seekable: false); // live mux stream — not seekable
+        }
+
+        // Whether the fullscreen bar may scrub right now: a directly-seekable source (360p / file / the swapped
+        // complete copy), OR a live mux whose full faststart copy has finished muxing in the background.
+        private bool CanSeek() => _avpro.IsSeekable || _muxer.SeekableReady;
+
+        // Scrub to <paramref name="seconds"/>. A seekable source seeks in place; a still-streaming mux swaps to
+        // its complete faststart copy (finished in the background) and seeks there — after which it stays a
+        // normal seekable file. Called from the fullscreen bar's seek release.
+        private void DoSeek(double seconds)
+        {
+            if (_avpro.IsSeekable) { _avpro.Seek(seconds); return; }
+            var seekPath = _muxer.SeekablePath;
+            if (_muxer.SeekableReady && seekPath != null)
+            {
+                _resumeSeekS = seconds > 1.0 ? seconds : 1.01; // UpdateAvPro seeks here once the new media loads
+                _avpro.SetDurationOverride(0);                 // the complete copy reports its own real duration
+                OpenAvPro(seekPath, seekable: true);           // swap to the indexed file — scrub works from now on
+                _log.Info($"[WorldScreen] scrub → swapped to the seekable copy at {seconds:F0}s");
+            }
         }
 
         // The HLS mux never became playable — stop it and fall back ONCE to a combined (single-URL, usually

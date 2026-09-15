@@ -30,6 +30,7 @@ public sealed class StreamMuxer
     private ProgressiveServer? _server;
     private string? _dir;
     private string? _file;
+    private string? _seekFile; // second output: a complete faststart (seekable) copy, finalized when ffmpeg exits
 
     public StreamMuxer(string ffmpegPath, string workDir)
     {
@@ -62,6 +63,7 @@ public sealed class StreamMuxer
         {
             Directory.CreateDirectory(dir);
             string file = Path.Combine(dir, "stream.mp4");
+            string seekFile = Path.Combine(dir, "seek.mp4");
             var psi = new ProcessStartInfo
             {
                 FileName = _ffmpegPath,
@@ -69,18 +71,20 @@ public sealed class StreamMuxer
                 CreateNoWindow = true,
                 WorkingDirectory = _workDir,
             };
-            // -c copy: stream-copy both tracks (no re-encode) — cheap, and MP4 edit lists preserve A/V sync.
-            // frag_keyframe+empty_moov: moov at the FRONT so the file plays while it is still being written.
+            // TWO outputs from one read of the inputs (no extra download):
+            //  1) stream.mp4 — frag_keyframe+empty_moov (moov at FRONT) → plays WHILE being written (instant).
+            //  2) seek.mp4   — +faststart (moov indexed, finalized when ffmpeg exits) → fully SEEKABLE once the
+            //     whole video has arrived; the plugin swaps to it when the viewer scrubs.
+            // -c copy on both: no re-encode, and MP4 edit lists keep A/V in sync.
             foreach (var a in new[]
             {
                 "-hide_banner", "-loglevel", "warning",
                 "-i", videoUrl,
                 "-i", audioUrl,
-                "-map", "0:v:0", "-map", "1:a:0",
-                "-c", "copy",
-                "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-                "-f", "mp4",
-                file,
+                "-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
+                "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", file,
+                "-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
+                "-movflags", "+faststart", "-f", "mp4", seekFile,
             })
             {
                 psi.ArgumentList.Add(a);
@@ -90,7 +94,7 @@ public sealed class StreamMuxer
             if (p == null) { TryDeleteDir(dir); return null; }
             var server = new ProgressiveServer(file, total);
             server.Start();
-            lock (_gate) { _proc = p; _server = server; _dir = dir; _file = file; }
+            lock (_gate) { _proc = p; _server = server; _dir = dir; _file = file; _seekFile = seekFile; }
             return $"http://127.0.0.1:{server.Port}/stream.mp4";
         }
         catch (Exception)
@@ -114,11 +118,29 @@ public sealed class StreamMuxer
         }
     }
 
+    /// <summary>True once ffmpeg has EXITED cleanly and the faststart (seekable) copy is finalized — the point
+    /// at which the plugin can swap to it so the viewer can scrub. (faststart's moov is written only on close,
+    /// so a running/killed mux is never "ready".)</summary>
+    public bool SeekableReady
+    {
+        get
+        {
+            Process? p; string? sf;
+            lock (_gate) { p = _proc; sf = _seekFile; }
+            if (p == null || sf == null) return false;
+            try { return p.HasExited && p.ExitCode == 0 && new FileInfo(sf).Length > ReadyThresholdBytes; }
+            catch (Exception) { return false; }
+        }
+    }
+
+    /// <summary>The complete faststart (seekable) MP4 file path — valid only once <see cref="SeekableReady"/>.</summary>
+    public string? SeekablePath { get { lock (_gate) return _seekFile; } }
+
     /// <summary>Kills the running mux + server (if any), freeing the port and deleting the temp dir.</summary>
     public void Stop()
     {
         Process? p; ProgressiveServer? s; string? dir;
-        lock (_gate) { p = _proc; s = _server; dir = _dir; _proc = null; _server = null; _dir = null; _file = null; }
+        lock (_gate) { p = _proc; s = _server; dir = _dir; _proc = null; _server = null; _dir = null; _file = null; _seekFile = null; }
         if (p != null)
         {
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch (Exception) { }

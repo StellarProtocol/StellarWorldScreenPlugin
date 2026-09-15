@@ -42,6 +42,8 @@ namespace Stellar.WorldScreen.Screen
 
         private AvProPlayer? _player;
         private Action? _onStop;
+        private Func<bool>? _canSeek;   // may we scrub right now? (null → use the player's own IsSeekable)
+        private Action<double>? _onSeek; // perform a scrub to N seconds (null → seek the player directly)
         private readonly List<UnityAction> _clickRefs = new();
 
         private float _idle;
@@ -49,8 +51,12 @@ namespace Stellar.WorldScreen.Screen
 
         public bool Visible => _root != null && _root.activeSelf;
 
-        /// <summary>Wires the bar to the player + a stop callback. Call once before first <see cref="Show"/>.</summary>
-        public void Bind(AvProPlayer player, Action onStop) { _player = player; _onStop = onStop; }
+        /// <summary>Wires the bar to the player + a stop callback (and optional scrub gate/handler for the
+        /// stream-then-seek flow). Call once before first <see cref="Show"/>.</summary>
+        public void Bind(AvProPlayer player, Action onStop, Func<bool>? canSeek = null, Action<double>? onSeek = null)
+        {
+            _player = player; _onStop = onStop; _canSeek = canSeek; _onSeek = onSeek;
+        }
 
         public void Show() { EnsureCreated(); _root!.SetActive(true); _idle = 0f; _lastMouse = Input.mousePosition; SetBarShown(true, instant: true); }
         public void Hide() { if (_root != null) _root.SetActive(false); }
@@ -180,9 +186,11 @@ namespace Stellar.WorldScreen.Screen
 
             if (press)
             {
-                // Only allow a seek drag when the source is seekable — a live progressive-mux stream has no seek
-                // index, so seeking it freezes the decoder; ignore knob presses there entirely.
-                if (OverPadded(_seekTrackRt, 16f) && _player.IsSeekable) { _seekDrag = true; Frac(_seekTrackRt, out _seekPreview); }
+                // Only allow a seek drag when scrubbing is available: a directly-seekable source, or a mux whose
+                // full seekable copy has finished in the background. Otherwise ignore knob presses (dragging a
+                // live-only stream would freeze the decoder).
+                bool canSeek = _canSeek != null ? _canSeek() : _player.IsSeekable;
+                if (OverPadded(_seekTrackRt, 16f) && canSeek) { _seekDrag = true; Frac(_seekTrackRt, out _seekPreview); }
                 else if (OverPadded(_volTrackRt, 16f)) _volDrag = true;
             }
 
@@ -194,7 +202,11 @@ namespace Stellar.WorldScreen.Screen
             else if (_seekDrag || _volDrag)
             {
                 // Released: commit a pending seek, then clear so nothing keeps following the mouse.
-                if (_seekDrag) { double dur = _player.Duration; if (dur > 0.01) _player.Seek(_seekPreview * dur); }
+                if (_seekDrag)
+                {
+                    double dur = _player.Duration;
+                    if (dur > 0.01) { double t = _seekPreview * dur; if (_onSeek != null) _onSeek(t); else _player.Seek(t); }
+                }
                 _seekDrag = false; _volDrag = false;
             }
         }
